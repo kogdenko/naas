@@ -9,6 +9,7 @@ struct naas_strbuf;
 
 void naas_set_log_level(int log_level);
 int naas_get_log_level(void);
+int naas_log_level_from_string(const char *s);
 void naas_log_add_error(struct naas_strbuf *sb, int errnum);
 void naas_log_flush(int level, struct naas_strbuf *sb);
 void naas_log_init(const char *ident, int options);

@@ -1,9 +1,30 @@
+import platform
+
 COMPILER='clang'
 
 def flags_to_string(flags):
 	return ' ' + ' '.join(flags)
 
-def vpp_lcpd(env, deps):
+
+def install(env, item, path):
+    env.Install(path, item)
+    env.Alias('install', path)
+
+
+def install_lib(env, lib):
+#	if platform.architecture()[0] == "64bit":
+#		lib_path = '/usr/lib64'
+#	else:
+#		lib_path = '/usr/lib'
+	lib_path = '/usr/local/lib'
+	install(env, lib, lib_path)
+
+
+def install_prog(env, prog):
+	install(env, prog, '/usr/local/bin')
+
+
+def naas_vpp_lcpd(env, deps):
 	seg6_local_vrftable_test_c = """
 #include <stdio.h>
 #include <linux/seg6_local.h>
@@ -41,9 +62,11 @@ main()
 
 	env.Append(CFLAGS = flags_to_string(cflags))
 	env.Append(LINKFLAGS = flags_to_string(ldflags))
-	prog = env.Program("bin/vpp-lcpd", "vpp-lcpd/main.c")
+	prog = env.Program("bin/naas-vpp-lcpd", "naas-vpp-lcpd/main.c")
 	for dep in deps:
 		Requires(prog, dep)
+	install_prog(env, prog)
+	return prog
 
 
 def naas_common(env):
@@ -54,7 +77,9 @@ def naas_common(env):
 		'naas-common/list.c',
 	]
 	env = env.Clone()
-	return env.SharedLibrary('bin/libnaas-common.so', srcs)
+	lib = env.SharedLibrary('bin/libnaas-common.so', srcs)
+	install_lib(env, lib)
+	return lib
 
 
 def naas_vpp(env, deps):
@@ -74,9 +99,10 @@ def naas_vpp(env, deps):
 	lib = env.SharedLibrary('bin/libnaas-vpp.so', srcs)
 	for dep in deps:
 		Requires(lib, dep)
+	install_lib(env, lib)
 
 
-def route_based_updown(env, deps):
+def naas_route_based_updown(env, deps):
 	sswan = "root/vpp/build-root/build-vpp-native/external/sswan"
 
 	cflags = [
@@ -88,18 +114,21 @@ def route_based_updown(env, deps):
 		'-lstrongswan',
 		'-lvici',
 		'-lnaas-common',
+		'-lnaas-vpp',
 	]
 
 	srcs = [
-		'route-based-updown/main.c',
+		'naas-route-based-updown/main.c',
 	]
 
 	env = env.Clone()
 	env.Append(CFLAGS = flags_to_string(cflags))
 	env.Append(LINKFLAGS = flags_to_string(ldflags))
-	prog = env.Program('bin/route-based-updown', srcs)
+	prog = env.Program('bin/naas-route-based-updown', srcs)
 	for dep in deps:
 		Requires(prog, dep)
+	install_prog(env, prog)
+	return prog
 
 
 ldflags = [
@@ -122,5 +151,5 @@ env['LINKCOM'] = '$LINK -o $TARGET $SOURCES $LINKFLAGS $__RPATH $_LIBDIRFLAGS $_
 
 libnaas_common = naas_common(env)
 libnaas_vpp = naas_vpp(env, [ libnaas_common ])
-vpp_lcpd(env, [ libnaas_common, libnaas_vpp ])
-route_based_updown(env, [ libnaas_common, libnaas_vpp ])
+naas_vpp_lcpd(env, [ libnaas_common, libnaas_vpp ])
+naas_route_based_updown(env, [ libnaas_common, libnaas_vpp ])

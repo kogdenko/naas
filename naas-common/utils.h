@@ -45,7 +45,10 @@
 void *naas_xmalloc(size_t size);
 char *naas_strzcpy(char *, const char *, size_t);
 const char *naas_inet6_ntop(const void *in6);
+int naas_inet_aton(const char *cp, struct in_addr *inp, unsigned int *maskp);
 const char *naas_bool_str(int b);
+void naas_print_invalidarg(const char *opt, const char *optarg);
+void naas_print_unspecifiedarg(const char *opt);
 
 static inline void
 naas_read_once(const volatile void *p, void *data, int size)

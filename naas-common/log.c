@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
 #include <syslog.h>
 
 #include "log.h"
@@ -17,12 +18,11 @@ naas_vlogf(int level, int errnum, const char *format, va_list ap)
 		return;
 	}
 	naas_strbuf_init(&sb, log_buf, sizeof(log_buf));
+	naas_strbuf_vaddf(&sb, format, ap);
 	if (errnum) {
 		naas_log_add_error(&sb, errnum);
-		naas_log_flush(level, &sb);
-	} else {
-		vsyslog(level, format, ap);
 	}
+	naas_log_flush(level, &sb);
 }
 
 void
@@ -37,6 +37,24 @@ naas_get_log_level(void)
 	return g_naas_log_level;
 }
 
+int
+naas_log_level_from_string(const char *s)
+{
+	if (!strcasecmp(s, "err")) {
+		return LOG_ERR;
+	} else if (!strcasecmp(s, "warning")) {
+		return LOG_WARNING;
+	} else if (!strcasecmp(s, "notice")) {
+		return LOG_NOTICE;
+	} else if (!strcasecmp(s, "info")) {
+		return LOG_INFO;
+	} else if (!strcasecmp(s, "debug")) {
+		return LOG_DEBUG;
+	} else {
+		return -EINVAL;
+	}
+}
+
 void
 naas_log_add_error(struct naas_strbuf *sb, int errnum)
 {
@@ -46,7 +64,11 @@ naas_log_add_error(struct naas_strbuf *sb, int errnum)
 void
 naas_log_flush(int level, struct naas_strbuf *sb)
 {
-	syslog(level, "%s", naas_strbuf_cstr(sb));
+	const char *s;
+
+	s = naas_strbuf_cstr(sb);
+	syslog(level, "%s", s);
+	printf("%s\n", s);
 }
 
 void

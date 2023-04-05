@@ -431,14 +431,13 @@ print_usage(void)
 	"\n",
 	LCP_DAEMON_NAME
         );
-        exit(0);
 }
 
 int
 main(int argc, char **argv)
 {
 	struct nl_sock *sock;
-	int fd, opt, dflag, long_option_index, log_options;
+	int fd, opt, dflag, long_option_index, log_options, log_level;
 	const char *long_option_name;
 	fd_set rfds;
 	static struct option long_options[] = {
@@ -466,18 +465,9 @@ main(int argc, char **argv)
 			break;
 
 		case 'l':
-			if (!strcasecmp(optarg, "err")) {
-				naas_set_log_level(LOG_ERR);
-			} else if (!strcasecmp(optarg, "warning")) {
-				naas_set_log_level(LOG_WARNING);
-			} else if (!strcasecmp(optarg, "notice")) {
-				naas_set_log_level(LOG_NOTICE);
-			} else if (!strcasecmp(optarg, "info")) {
-				naas_set_log_level(LOG_INFO);
-			} else if (!strcasecmp(optarg, "debug")) {
-				naas_set_log_level(LOG_DEBUG);
-			} else {
-				fprintf(stderr, "-l: Invalid log level '%s'\n", optarg);
+			log_level = naas_log_level_from_string(optarg);
+			if (log_level < 0) {
+				naas_print_invalidarg("-l", optarg);
 				print_usage();
 				return EXIT_FAILURE;
 			}
@@ -485,7 +475,7 @@ main(int argc, char **argv)
 
 		default:
 			print_usage();
-			break;
+			return EXIT_SUCCESS;
 		}
 	}
 

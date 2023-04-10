@@ -7,7 +7,7 @@ set charon.plugins.kernel-vpp.use_tunnel_mode_sa = no
 set -o nounset
 set -o errexit
 
-set -x
+#set -x
 
 VTI_IF="vti${PLUTO_REQID}"
 IPIP_IF="ipip${PLUTO_REQID}"
@@ -25,10 +25,11 @@ case "${PLUTO_VERB}" in
 	# PLUTO_ME=192.168.31.11
 	# PLUTO_PEER=192.168.31.13
 
-	echo "START"
-	naas-route-based-updown -C 6000 --reqid ${PLUTO_REQID} --me ${PLUTO_REQID} --peer ${PLUTO_PEER} --peer-client ${PLUTO_PEER_CLIENT} --loop loop100
+	#echo "START"
 
-	echo "DONE"
+	naas-route-based-updown -C 6000 --reqid ${PLUTO_REQID} --me ${PLUTO_REQID} --peer ${PLUTO_PEER} --peer-client ${PLUTO_PEER_CLIENT}
+
+	#echo "DONE"
 
 	#naas-route-based-updown --reqid ${PLUTO_REQID} --me ${PLUTO_REQID} --peer ${PLUTO_PEER} --peer-client ${PLUTO_PEER_CLIENT} --loop loop100
 
@@ -41,6 +42,8 @@ case "${PLUTO_VERB}" in
 #	vppctl "ip route add ${PLUTO_PEER_CLIENT} via $IPIP_IF"
         ;;
     down-client)
-        ip tunnel del "${VTI_IF}"
+	sw_if_index=`vppctl "show interface $IPIP_IF" | tail -1 | awk '{print $2}'`
+	vppctl "delete ipip tunnel sw_if_index $sw_if_index"
+        #ip tunnel del "${VTI_IF}"
         ;;
 esac

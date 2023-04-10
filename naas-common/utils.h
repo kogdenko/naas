@@ -3,6 +3,7 @@
 
 #include <inttypes.h>
 #include <stddef.h>
+#include <arpa/inet.h>
 
 #define naas_barrier() __asm__ __volatile__("": : :"memory")
 
@@ -42,9 +43,14 @@
 #define NAAS_ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 #define NAAS_MIN(a, b) ((a) < (b) ? (a) : (b))
 
+#define NAAS_INET_NTOA(src, dst) inet_ntop(AF_INET, src, dst, INET_ADDRSTRLEN)
+	
+
 void *naas_xmalloc(size_t size);
 char *naas_strzcpy(char *, const char *, size_t);
-const char *naas_inet6_ntop(const void *in6);
+const char *naas_inet_ntop(int af, const void *in6, char *addrstr);
+#define naas_inet4_ntop(in4, addrstr) naas_inet_ntop(AF_INET, in4, addrstr)
+#define naas_inet6_ntop(in6, addrstr) naas_inet_ntop(AF_INET6, in6, addrstr)
 int naas_inet_aton(const char *cp, struct in_addr *inp, unsigned int *maskp);
 const char *naas_bool_str(int b);
 void naas_print_invalidarg(const char *opt, const char *optarg);

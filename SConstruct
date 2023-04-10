@@ -2,6 +2,11 @@ import platform
 
 COMPILER='clang'
 
+def die(s):
+    print(s)
+    Exit(1)
+
+
 def flags_to_string(flags):
 	return ' ' + ' '.join(flags)
 
@@ -92,6 +97,7 @@ def naas_vpp(env, deps):
 		'-lvlibmemoryclient',
 		'-lvppapiclient',
 		'-lvlibapi',
+		'-lnaas-common',
 	]
 
 	env = env.Clone()
@@ -102,8 +108,50 @@ def naas_vpp(env, deps):
 	install_lib(env, lib)
 
 
+def get_sswan():
+	sswan = GetOption('sswan')
+	if sswan == None:
+#		sswan = "/root/vpp-latest/build-root/build-vpp-native/external/sswan"
+		die("Option '--sswan' not specified")
+	return sswan
+
+
+def vpp_sswan(env, deps):
+	sswan = get_sswan()
+
+	cflags = [
+		'-include ' + sswan + '/config.h',
+		'-I' + sswan + '/src/libstrongswan',
+		'-I' + sswan + '/src/libcharon',
+	]
+
+	srcs = [
+		'vpp_sswan/kernel_vpp_plugin.c',
+		'vpp_sswan/kernel_vpp_shared.c',
+		'vpp_sswan/kernel_vpp_ipsec.c',
+		'vpp_sswan/kernel_vpp_net.c',
+	]
+
+	ldflags = [
+		'-lvppinfra',
+		'-lvlibmemoryclient',
+		'-lvlibapi',
+		'-lsvm',
+		'-lvppapiclient',
+		'-lnaas-vpp',
+	]
+
+	env = env.Clone()
+	env.Append(CFLAGS = flags_to_string(cflags))
+	env.Append(LINKFLAGS = flags_to_string(ldflags))
+	lib = env.SharedLibrary('bin/libstrongswan-kernel-vpp.so', srcs)
+	for dep in deps:
+		Requires(lib, dep)
+	return lib
+
+
 def naas_route_based_updown(env, deps):
-	sswan = "root/vpp/build-root/build-vpp-native/external/sswan"
+	sswan = get_sswan() 
 
 	cflags = [
 		'-I/' + sswan + '/src/libcharon/plugins/vici/',
@@ -149,7 +197,10 @@ env.Append(LINKFLAGS = flags_to_string(ldflags))
 
 env['LINKCOM'] = '$LINK -o $TARGET $SOURCES $LINKFLAGS $__RPATH $_LIBDIRFLAGS $_LIBFLAGS'
 
+AddOption('--sswan', type='string', action='store', help='Strongswan sources')
+
 libnaas_common = naas_common(env)
 libnaas_vpp = naas_vpp(env, [ libnaas_common ])
-naas_vpp_lcpd(env, [ libnaas_common, libnaas_vpp ])
-naas_route_based_updown(env, [ libnaas_common, libnaas_vpp ])
+libstrongswan_kernel_vpp = vpp_sswan(env, [ libnaas_vpp ])
+naas_vpp_lcpd(env, [ libnaas_common, libnaas_vpp, libstrongswan_kernel_vpp ])
+naas_route_based_updown(env, [ libnaas_vpp ])

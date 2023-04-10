@@ -37,11 +37,9 @@ naas_strzcpy(char *dest, const char *src, size_t n)
 }
 
 const char *
-naas_inet6_ntop(const void *in6)
+naas_inet_ntop(int af, const void *in6, char *addrstr)
 {
-	static char in6_buf[INET6_ADDRSTRLEN];
-
-	return inet_ntop(AF_INET6, in6, in6_buf, sizeof(in6_buf));
+	return inet_ntop(af, in6, addrstr, INET6_ADDRSTRLEN);
 }
 
 int

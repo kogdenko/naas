@@ -19,9 +19,7 @@ naas_vlogf(int level, int errnum, const char *format, va_list ap)
 	}
 	naas_strbuf_init(&sb, log_buf, sizeof(log_buf));
 	naas_strbuf_vaddf(&sb, format, ap);
-	if (errnum) {
-		naas_log_add_error(&sb, errnum);
-	}
+	naas_log_add_error(&sb, errnum);
 	naas_log_flush(level, &sb);
 }
 
@@ -58,7 +56,11 @@ naas_log_level_from_string(const char *s)
 void
 naas_log_add_error(struct naas_strbuf *sb, int errnum)
 {
-	naas_strbuf_addf(sb, " (%d:%s)", errnum, strerror(errnum));
+	if (errnum > 0) {
+		naas_strbuf_addf(sb, " (%d:%s)", errnum, strerror(errnum));
+	} else if (errnum < 0) {
+		naas_strbuf_addf(sb, " (ret %d)", -errnum);
+	}
 }
 
 void
@@ -68,7 +70,7 @@ naas_log_flush(int level, struct naas_strbuf *sb)
 
 	s = naas_strbuf_cstr(sb);
 	syslog(level, "%s", s);
-	printf("%s\n", s);
+	//printf("%s\n", s);
 }
 
 void

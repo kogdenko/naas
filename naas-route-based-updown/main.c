@@ -10,34 +10,68 @@
 #include <naas-common/utils.h>
 #include <naas-common/log.h>
 #include <naas-common/strbuf.h>
+#include <naas-common/list.h>
 #include <naas-vpp/api.h>
 
 #define PROG_NAME "naas-route-based-updown"
-#define REQBUFLEN 2048
+#define REQMSG_LEN_MAX 2048
 
-struct ipsec_sa_data {
-	uint32_t spi_in;
-	uint32_t sa_in;
-	uint32_t spi_out;
-	uint32_t sa_out;
+#define REQ_IN 0
+#define REQ_OUT 1
+
+struct request {
+	struct naas_dlist list;
+	uint32_t reqid;
+	struct in_addr me;
+	struct in_addr peer;
+	struct in_addr peer_client;
+	unsigned int peer_client_mask;
+	uint32_t spi[2];
+	uint32_t sa[2];
+	uint8_t has_spi[2];
+	uint8_t has_sa[2];
 };
 
-struct list_sa_parser {
-	int reqid;
-	int inout_mask;
-	int spi_in;
-	int spi_out;
+static int g_log_inited;
+static uint32_t g_loop_sw_if_index;
+
+#define VICI_RESOLVE
+
+static int finalize_request(struct request *req);
+
+#ifdef VICI_RESOLVE
+struct list_sa_udata {
+	struct naas_dlist *reqq;
+	struct naas_dlist *found;
 };
 
-void
+static void
+list_sa_set_spi(struct list_sa_udata *udata, uint32_t reqid, int dir, uint32_t spi)
+{
+	struct request *req, *tmp;
+
+	NAAS_DLIST_FOREACH_SAFE(req, udata->reqq, list, tmp) {
+		if (reqid == req->reqid) {
+			req->spi[dir] = spi;
+			req->has_spi[dir] = 1;
+			if (req->has_spi[!dir]) {
+				NAAS_DLIST_REMOVE(req, list);
+				NAAS_DLIST_INSERT_TAIL(udata->found, req, list);
+			}
+		}
+	}
+}
+
+static void
 list_sa(void *user, char *name, vici_res_t *res)
 {
-	int reqid;
+	int dir;
+	uint32_t reqid, spi;
 	char *key, *value;
-	struct list_sa_parser *parser;
 	vici_parse_t rc;
+	struct list_sa_udata *udata;
 
-	parser = user;
+	udata = user;
 	reqid = -1;
 	for (;;) {
 		rc = vici_parse(res);
@@ -53,16 +87,10 @@ list_sa(void *user, char *name, vici_res_t *res)
 			value = vici_parse_value_str(res);
 			if (!strcmp(key, "reqid")) {
 				reqid = strtoul(value, NULL, 10);
-			} else if (!strcmp(key, "spi-in")) {
-				if (reqid == parser->reqid) {
-					parser->spi_in = strtoul(value, NULL, 16);
-					parser->inout_mask |= (1 << 0);
-				}
-			} else if (!strcmp(key, "spi-out")) {
-				if (reqid == parser->reqid) {
-					parser->spi_out = strtoul(value, NULL, 16);
-					parser->inout_mask |= (1 << 1);
-				}
+			} else if (!strcmp(key, "spi-out") || !strcmp(key, "spi-in")) {
+				dir = !strcmp(key, "spi-in") ? REQ_IN : REQ_OUT;
+				spi = strtoul(value, NULL, 16);
+				list_sa_set_spi(udata, reqid, dir, spi);
 			}
 			break;
 		default:
@@ -72,13 +100,13 @@ list_sa(void *user, char *name, vici_res_t *res)
 }
 
 static int
-get_spi_inout(int reqid, uint32_t *spi_in, uint32_t *spi_out)
+list_sas(struct naas_dlist *reqq, struct naas_dlist *found)
 {
 	int rc;
 	vici_conn_t *conn;
 	vici_req_t *req;
 	vici_res_t *res;
-	struct list_sa_parser parser;
+	struct list_sa_udata udata;
 
 	vici_init();
 	conn = vici_connect(NULL);
@@ -88,30 +116,20 @@ get_spi_inout(int reqid, uint32_t *spi_in, uint32_t *spi_out)
 		return rc;
 	}
 
-	parser.reqid = reqid;
-	parser.inout_mask = 0;
-
-	rc = vici_register(conn, "list-sa", list_sa, &parser);
+	udata.reqq = reqq;
+	udata.found = found;
+	rc = vici_register(conn, "list-sa", list_sa, &udata);
 	if (rc != 0) {
 		rc = -errno;
 		naas_logf(LOG_ERR, errno, "vici_register() failed");
 		goto err;
 	}
 
-	req = vici_begin("list-sas");	
-	res = vici_submit(req, conn);
+	req = vici_begin("list-sas");
+	vici_add_key_valuef(req, "noblock", "yes");
 
+	res = vici_submit(req, conn);
 	if (res) {
-		if (parser.inout_mask != 3) {
-			rc = -ESRCH;
-		} else {
-			if (spi_in != NULL) {
-				*spi_in = parser.spi_in;
-			}
-			if (spi_out != NULL) {
-				*spi_out = parser.spi_out;
-			}
-		}
 		vici_free_res(res);
 	} else {
 		rc = -errno;
@@ -125,95 +143,94 @@ err:
 static void
 ipsec_sa_dump_handler(void *user, uint32_t sad_id, uint32_t spi)
 {
-	struct ipsec_sa_data *sa_data;
+	int dir;
+	struct naas_dlist *head;
+	struct request *req;
 
-	sa_data = user;
-	if (sa_data->spi_in == spi) {
-		sa_data->sa_in = sad_id;
-	}
-	if (sa_data->spi_out == spi) {
-		sa_data->sa_out = sad_id;
+	head = user;
+	NAAS_DLIST_FOREACH(req, head, list) {
+		for (dir = 0; dir < 2; ++dir) {
+			if (req->spi[dir] == spi) {
+				req->sa[dir] = sad_id;
+				req->has_sa[dir] = 1;
+			}
+		}
 	}
 }
 
-struct sw_interface_dump_ret {
-	int sw_if_index;
-	char interface_name[NAAS_API_INTERFACE_NAME_MAX];
-};
+static void
+search_sa(struct naas_dlist *reqq)
+{
+	int dir;
+	struct naas_dlist found;
+	struct request *req, *tmp;
+
+	naas_dlist_init(&found);
+
+	list_sas(reqq, &found);
+
+	if (naas_dlist_is_empty(&found)) {
+		return;
+	}
+
+	naas_api_ipsec_sa_dump(ipsec_sa_dump_handler, &found);
+
+	NAAS_DLIST_FOREACH_SAFE(req, &found, list, tmp) {
+		for (dir = 0; dir < 2; ++dir) {
+			if (!req->has_sa[dir]) {
+				naas_logf(LOG_ERR, 0, "%u: No sa_%s (spi=%x)", req->reqid,
+						dir == REQ_IN ? "in" : "out", req->spi[dir]);
+				break;
+			}
+		}
+		if (dir == 2) {
+			finalize_request(req);
+		}
+		NAAS_DLIST_REMOVE(req, list);
+		free(req);
+	}
+}
+#endif // VICI_RESOLVE
 
 static void
 sw_interface_details(void *user, struct naas_api_sw_interface *interface)
 {
-	struct sw_interface_dump_ret *ret;
+	int *sw_if_index;
 
-	ret = user;
-	if (!strcmp(ret->interface_name, interface->interface_name)) {
-		ret->sw_if_index = interface->sw_if_index;
-	}
+	sw_if_index = user;
+
+	*sw_if_index = interface->sw_if_index;
 }
 
 static int
-tunnel_protect(uint32_t reqid, int ipip_sw_if_index)
+get_sw_if_index(const char *loop)
 {
-	int rc;
-	struct ipsec_sa_data sa_data;
+	int sw_if_index;
 
-	rc = get_spi_inout(reqid, &sa_data.spi_in, &sa_data.spi_out);
-	if (rc != 0) {
-		naas_logf(LOG_ERR, -rc, "Cannot find spi by reqid: %d", reqid);
-		return rc;
-	}
+	naas_api_sw_interface_dump(sw_interface_details, &sw_if_index, loop);
 
-	sa_data.sa_in = -1;
-	sa_data.sa_out = -1;
-	naas_api_ipsec_sa_dump(ipsec_sa_dump_handler, &sa_data);	
-	if (sa_data.sa_in == -1) {
-		naas_logf(LOG_ERR, 0, "Cannot find sa_in by spi: %x", sa_data.spi_in);
-		return -ESRCH;
-	}
-	if (sa_data.sa_out == -1) {
-		naas_logf(LOG_ERR, 0, "Cannot find sa_out by spi: %x", sa_data.spi_out);
-		return -ESRCH;
-	}
-
-	rc = naas_api_ipsec_tunnel_protect_update(ipip_sw_if_index,
-			sa_data.sa_in, sa_data.sa_out);
-	if (rc != 0) {
-		naas_logf(LOG_ERR, -rc, "ipsec_tunnel_protect_update() failed");
-		return rc;
-	}
-
-	return 0;
-}
-
-static int
-route_based_updown(uint32_t reqid, struct in_addr me, struct in_addr peer,
-		struct in_addr peer_client, unsigned int peer_client_mask, const char *loop)
-{
-	int rc, loop_sw_if_index, ipip_sw_if_index;
-	struct sw_interface_dump_ret sw_interface_dump_ret;
-	struct naas_ipip_add_tunnel_ret naas_ipip_add_tunnel_ret;
-
-	naas_strzcpy(sw_interface_dump_ret.interface_name, loop,
-			sizeof(sw_interface_dump_ret.interface_name));
-	sw_interface_dump_ret.sw_if_index = -1;
-	naas_api_sw_interface_dump(sw_interface_details, &sw_interface_dump_ret);
-
-	if (sw_interface_dump_ret.sw_if_index < 0) {
+	if (sw_if_index < 0) {
 		naas_logf(LOG_ERR, 0, "Cannot find interface: '%s'", loop);
 		return -ESRCH;
 	}
-	loop_sw_if_index = sw_interface_dump_ret.sw_if_index;
 
-	rc = naas_ipip_add_tunnel(reqid, me, peer, &naas_ipip_add_tunnel_ret);
+	return sw_if_index;
+}
+
+static int
+finalize_request(struct request *req)
+{
+	int rc, ipip_sw_if_index;
+	struct naas_ipip_add_tunnel_ret naas_ipip_add_tunnel_ret;
+
+	rc = naas_api_ipip_add_tunnel(req->reqid, req->me, req->peer, &naas_ipip_add_tunnel_ret);
 	if (rc != 0) {
 		naas_logf(LOG_ERR, -rc, "ipip_add_tunnel() failed");
 		return rc;
 	}
 	ipip_sw_if_index = naas_ipip_add_tunnel_ret.sw_if_index;
 
-
-	rc = naas_api_sw_interface_set_unnumbered(1, loop_sw_if_index, ipip_sw_if_index);
+	rc = naas_api_sw_interface_set_unnumbered(1, g_loop_sw_if_index, ipip_sw_if_index);
 	if (rc != 0) {
 		naas_logf(LOG_ERR, -rc, "sw_interface_set_unnumbered() failed");
 		return rc;
@@ -225,24 +242,48 @@ route_based_updown(uint32_t reqid, struct in_addr me, struct in_addr peer,
 		return rc;
 	}
 
-	rc = naas_api_ip_route_add_del(1, peer_client, peer_client_mask, ipip_sw_if_index);
+	rc = naas_api_ip_route_add_del(1, req->peer_client, req->peer_client_mask, ipip_sw_if_index);
 	if (rc != 0) {
 		naas_logf(LOG_ERR, -rc, "ip_route_add_del() failed");
 		return rc;
 	}
 
-	rc = tunnel_protect(reqid, ipip_sw_if_index);
+	rc = naas_api_ipsec_tunnel_protect_update(ipip_sw_if_index,
+			req->sa[REQ_IN], req->sa[REQ_OUT]);
+	if (rc != 0) {
+		naas_logf(LOG_ERR, -rc, "ipsec_tunnel_protect_update() failed");
+		return rc;
+	}
+
 	return rc;
 }
 
 static int
-init(int log_options)
+init(int log_options, const char *loop)
 {
 	int rc;
 
-	naas_log_init(PROG_NAME, log_options);
+	if (!g_log_inited) {
+		g_log_inited = 1;
+		naas_log_init(PROG_NAME, log_options);
+	}
+
 	rc = naas_api_init(PROG_NAME);
-	return rc;
+	if (rc < 0) {
+		return rc;
+	}
+
+	rc = get_sw_if_index(loop);
+	if (rc < 0) {
+		return rc;
+	}
+
+	g_loop_sw_if_index = rc;
+
+	// Do we need to up interface ???
+	//naas_api_sw_interface_set_flags(g_loop_sw_if_index, IF_STATUS_API_FLAG_ADMIN_UP);
+
+	return 0;
 }
 
 static void
@@ -254,7 +295,7 @@ deinit(void)
 static int
 listen_onlocalport(int port)
 {
-	int rc, fd, opt;
+	int rc, fd, opt, flags;
 	struct sockaddr_in sin;
 
 	memset(&sin, 0, sizeof(sin));
@@ -275,17 +316,33 @@ listen_onlocalport(int port)
 	if (rc == -1) {
 		rc = -errno;
 		naas_logf(LOG_ERR, errno, "bind() failed");
-		close(fd);
-		return rc;
+		goto err;
 	}
 	rc = listen(fd, 5);
 	if (rc == -1) {
 		rc = -errno;
 		naas_logf(LOG_ERR, errno, "listen() failed");
-		close(fd);
-		return rc;
+		goto err;
 	}
+	rc = fcntl(fd, F_GETFL, 0);
+	if (rc == -1) {
+		rc = -errno;
+		naas_logf(LOG_ERR, errno, "fcntl(F_GETFL) failed");
+		goto err;
+	}
+	flags = rc|O_NONBLOCK;
+	rc = fcntl(fd, F_SETFL, flags);
+	if (rc == -1) {
+		rc = -errno;
+		naas_logf(LOG_ERR, errno, "fcntl(F_SETFL) failed");
+		goto err;
+	}
+
 	return fd;
+
+err:
+	close(fd);
+	return rc;
 }
 
 static int
@@ -346,16 +403,16 @@ out:
 
 static int
 send_request(int fd, uint32_t reqid, struct in_addr me, struct in_addr peer,
-		struct in_addr peer_client, unsigned int peer_client_mask, const char *loop)
+		struct in_addr peer_client, unsigned int peer_client_mask)
 {
 	int rc;
-	char req[REQBUFLEN];
+	char req[REQMSG_LEN_MAX];
 	struct naas_strbuf sb;
 
 	naas_strbuf_init(&sb, req, sizeof(req));
 	naas_strbuf_addf(&sb, "%u %s ", reqid, inet_ntoa(me));
 	naas_strbuf_addf(&sb, "%s ", inet_ntoa(peer));
-	naas_strbuf_addf(&sb, "%s/%u %s\n", inet_ntoa(peer_client), peer_client_mask, loop);
+	naas_strbuf_addf(&sb, "%s/%u\n", inet_ntoa(peer_client), peer_client_mask);
 
 	rc = send(fd, naas_strbuf_cstr(&sb), sb.sb_len, 0);
 	if (rc < 0) {
@@ -367,61 +424,94 @@ send_request(int fd, uint32_t reqid, struct in_addr me, struct in_addr peer,
 	return rc;
 }
 
-int
-handle_request(char *req)
+static void
+handle_request(struct naas_dlist *reqq, char *reqmsg, int reqmsg_len)
 {
-	int rc, argc;
+	int i, argc;
 	unsigned int peer_client_mask;
 	uint32_t reqid;
 	struct in_addr me, peer, peer_client;
-	char *s, *loop, *argv[5];
+	struct request *req;
+	char *s, *argv[4];
 
 	argc = 0;	
-	for (s = strtok(req, " \r\n\t"); s != NULL; s = strtok(NULL, " \r\n\t")) {
+	for (s = strtok(reqmsg, " \r\n\t"); s != NULL; s = strtok(NULL, " \r\n\t")) {
 		if (argc < NAAS_ARRAY_SIZE(argv)) {
 			argv[argc++] = s;
 		}
 	}
 
-	if (argc < 5) {
-		return -EINVAL;
+	if (argc < 4) {
+		goto err;
 	}
 	reqid = strtoul(argv[0], NULL, 10);
 	if (naas_inet_aton(argv[1], &me, NULL)) {
-		return -EINVAL;
+		goto err;
 	}
 	if (naas_inet_aton(argv[2], &peer, NULL)) {
-		return -EINVAL;
+		goto err;
 	}
 	if (naas_inet_aton(argv[3], &peer_client, &peer_client_mask)) {
-		return -EINVAL;
+		goto err;
 	}
-	loop = argv[4];
+	
+	req = naas_xmalloc(sizeof(*req));
+	memset(req, 0, sizeof(*req));
+	req->reqid = reqid;
+	req->me = me;
+	req->peer = peer;
+	req->peer_client = peer_client;
+	req->peer_client_mask = peer_client_mask;
+#ifdef VICI_RESOLVE
+	NAAS_DLIST_INSERT_TAIL(reqq, req, list);
+#else
+	req->sa[REQ_IN] = 1;
+	req->sa[REQ_OUT] = 2;
+	finalize_request(req);
+#endif
+	return;
 
-	rc = route_based_updown(reqid, me, peer, peer_client, peer_client_mask, loop);
-
-	return rc;
+err:
+	for (i = 0; i < reqmsg_len; ++i) {
+		if (reqmsg[i] == '\0') {
+			reqmsg[i] = ' ';
+		}
+	}
+	naas_logf(LOG_ERR, 0, "Bad request: '%s'", reqmsg);
 }
 
 static void
-handle_client(int fd)
+server_loop(lfd)
 {
-	int i, rc, len;
-	char req[REQBUFLEN];
+	int rc, fd;
+	char reqmsg[REQMSG_LEN_MAX];
+	fd_set rfds;
+	struct naas_dlist reqq;
+	struct timeval to;
 
-	rc = read_request(fd, req, sizeof(req));
-	if (rc < 0) {
-		return;
-	}
-	len = rc;
-	rc = handle_request(req);
-	if (rc < 0) {
-		for (i = 0; i < len; ++i) {
-			if (req[i] == '\0') {
-				req[i] = ' ';
+	naas_dlist_init(&reqq);
+	while (1) {
+		FD_ZERO(&rfds);
+		FD_SET(lfd, &rfds);
+		to.tv_sec = 0;
+		to.tv_usec = 10000;
+		select(lfd + 1, &rfds, NULL, NULL, &to);
+		if (FD_ISSET(lfd, &rfds)) {
+			fd = accept(lfd, NULL, NULL);
+			if (fd >= 0) {
+				rc = read_request(fd, reqmsg, sizeof(reqmsg));
+				if (rc > 0) {
+					handle_request(&reqq, reqmsg, rc);
+				}
+				close(fd);
 			}
 		}
-		naas_logf(LOG_ERR, -rc, "Request '%s' failed", req);
+
+#ifdef VICI_RESOLVE
+		if (!naas_dlist_is_empty(&reqq)) {
+			search_sa(&reqq);
+		}
+#endif
 	}
 }
 
@@ -447,7 +537,7 @@ print_usage()
 int
 main(int argc, char **argv)
 {
-	int rc, fd, lfd, dflag, Lflag, Cflag, opt, reqid,
+	int rc, fd, dflag, Lflag, Cflag, opt, reqid,
 			long_option_index, log_options, log_level;
 	unsigned int peer_client_mask;
 	const char *long_option_name, *loop;
@@ -522,10 +612,16 @@ main(int argc, char **argv)
 	}
 
 	if (Lflag) {
+		if (loop == NULL) {
+			naas_print_unspecifiedarg("--loop");
+			print_usage();
+			return EXIT_FAILURE;
+		}
+
 		if (dflag) {
 			daemon(0, 0);
 		}
-		rc = init(log_options);
+		rc = init(log_options, loop);
 		if (rc) {
 			return EXIT_FAILURE;
 		}
@@ -534,16 +630,14 @@ main(int argc, char **argv)
 			deinit();
 			return EXIT_FAILURE;
 		}
-		lfd = rc;
-		while (1) {
-			fd = accept(lfd, NULL, NULL);
-			if (fd >= 0) {
-				handle_client(fd);
-				close(fd);
-			}
-		}
+		server_loop(rc);
 		deinit();
 	} else {
+		if (!Cflag) {
+			print_usage();
+			return EXIT_FAILURE;
+		}
+
 		if (reqid < 0) {
 			naas_print_unspecifiedarg("--reqid");
 			print_usage();
@@ -562,30 +656,12 @@ main(int argc, char **argv)
 			return EXIT_FAILURE;
 		}
 
-		if (loop == NULL) {
-			naas_print_unspecifiedarg("--loop");
-			print_usage();
-			return EXIT_FAILURE;
-		}
-
-		if (Cflag) {
-			rc = connect_tolocalport(Cflag);
-			if (rc > 0) {
-				fd = rc;
-				rc = send_request(fd, reqid, me, peer,
-					peer_client, peer_client_mask, loop);
-				close(fd);
-			}
-		} else {
-			rc = init(log_options);
-			if (rc) {
-				return EXIT_FAILURE;
-			}
-
-			rc = route_based_updown(reqid, me, peer,
-					peer_client, peer_client_mask, loop);
-	
-			deinit();
+		rc = connect_tolocalport(Cflag);
+		if (rc > 0) {
+			fd = rc;
+			rc = send_request(fd, reqid, me, peer,
+					peer_client, peer_client_mask);
+			close(fd);
 		}
 	}
 

@@ -255,6 +255,7 @@ static void
 lcp_gen_bsid(uint8_t *bsid, const uint8_t *seg1)
 {
 	int i;
+	char seg1_addrstr[INET6_ADDRSTRLEN];
 
 	memcpy(bsid, seg1, 16);
 	for (i = 0; i < 8; ++i) {
@@ -263,7 +264,8 @@ lcp_gen_bsid(uint8_t *bsid, const uint8_t *seg1)
 			return;
 		}
 	}
-	naas_logf(LOG_ERR, 0, "Generation of bsid failed, seg1=%s", naas_inet6_ntop(seg1));
+	naas_logf(LOG_ERR, 0, "Generation of bsid failed, seg1=%s",
+			naas_inet6_ntop(seg1, seg1_addrstr));
 }
 
 static void
@@ -459,7 +461,8 @@ main(int argc, char **argv)
 			} else if (!strcmp(long_option_name, "log-console")) {
 				log_options = LOG_CONS;
 			}
-			return 0;
+			break;
+
 		case 'd':
 			dflag = 1;
 			break;

@@ -3,9 +3,8 @@
 #include <arpa/inet.h>
 #include <net/if.h>
 
-#include <naas-common/utils.h>
-#include <naas-common/log.h>
-
+#include "utils.h"
+#include "log.h"
 #include "api.h"
 
 #define vl_endianfun

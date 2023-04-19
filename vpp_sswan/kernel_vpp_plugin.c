@@ -32,7 +32,7 @@
 #include "kernel_vpp_ipsec.h"
 #include "kernel_vpp_net.h"
 
-#include <naas-vpp/api.h>
+#include <libnaas/api.h>
 
 typedef struct private_kernel_vpp_plugin_t private_kernel_vpp_plugin_t;
 

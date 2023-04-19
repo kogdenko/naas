@@ -47,8 +47,7 @@ main()
 		'-l:libnl-3.so.200.27.0',
 		'-l:libnl-route-3.so.200.27.0',
 		'-l:libnl-cli-3.so.200.27.0',
-		'-lnaas-common',
-		'-lnaas-vpp',
+		'-lnaas',
 	]
 
 	cflags = [
@@ -74,22 +73,13 @@ main()
 	return prog
 
 
-def naas_common(env):
+def build_libnaas(env):
 	srcs = [
-		'naas-common/utils.c',
-		'naas-common/strbuf.c',
-		'naas-common/log.c',
-		'naas-common/list.c',
-	]
-	env = env.Clone()
-	lib = env.SharedLibrary('bin/libnaas-common.so', srcs)
-	install_lib(env, lib)
-	return lib
-
-
-def naas_vpp(env, deps):
-	srcs = [
-		'naas-vpp/api.c',
+		'libnaas/utils.c',
+		'libnaas/strbuf.c',
+		'libnaas/log.c',
+		'libnaas/list.c',
+		'libnaas/api.c',
 	]
 
 	ldflags = [
@@ -97,15 +87,14 @@ def naas_vpp(env, deps):
 		'-lvlibmemoryclient',
 		'-lvppapiclient',
 		'-lvlibapi',
-		'-lnaas-common',
 	]
 
 	env = env.Clone()
 	env.Append(LINKFLAGS = flags_to_string(ldflags))
-	lib = env.SharedLibrary('bin/libnaas-vpp.so', srcs)
-	for dep in deps:
-		Requires(lib, dep)
+
+	lib = env.SharedLibrary('bin/libnaas.so', srcs)
 	install_lib(env, lib)
+	return lib
 
 
 def get_sswan():
@@ -138,7 +127,7 @@ def vpp_sswan(env, deps):
 		'-lvlibapi',
 		'-lsvm',
 		'-lvppapiclient',
-		'-lnaas-vpp',
+		'-lnaas',
 	]
 
 	env = env.Clone()
@@ -161,8 +150,7 @@ def naas_route_based_updown(env, deps):
 		'-L/usr/lib/ipsec',
 		'-lstrongswan',
 		'-lvici',
-		'-lnaas-common',
-		'-lnaas-vpp',
+		'-lnaas',
 	]
 
 	srcs = [
@@ -199,8 +187,7 @@ env['LINKCOM'] = '$LINK -o $TARGET $SOURCES $LINKFLAGS $__RPATH $_LIBDIRFLAGS $_
 
 AddOption('--sswan', type='string', action='store', help='Strongswan sources')
 
-libnaas_common = naas_common(env)
-libnaas_vpp = naas_vpp(env, [ libnaas_common ])
-libstrongswan_kernel_vpp = vpp_sswan(env, [ libnaas_vpp ])
-naas_vpp_lcpd(env, [ libnaas_common, libnaas_vpp, libstrongswan_kernel_vpp ])
-naas_route_based_updown(env, [ libnaas_vpp ])
+libnaas = build_libnaas(env)
+libstrongswan_kernel_vpp = vpp_sswan(env, [ libnaas ])
+naas_vpp_lcpd(env, [ libnaas, libstrongswan_kernel_vpp ])
+naas_route_based_updown(env, [ libnaas ])

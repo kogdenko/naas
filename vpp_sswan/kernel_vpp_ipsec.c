@@ -60,7 +60,7 @@
 #include <sys/stat.h>
 #include <dirent.h>
 
-#include <naas-vpp/api.h>
+#include <libnaas/api.h>
 
 #define PRIO_BASE 384
 

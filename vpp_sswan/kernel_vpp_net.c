@@ -39,7 +39,7 @@
 #include "kernel_vpp_net.h"
 #include "kernel_vpp_shared.h"
 
-#include <naas-vpp/api.h>
+#include <libnaas/api.h>
 
 typedef struct private_kernel_vpp_net_t private_kernel_vpp_net_t;
 

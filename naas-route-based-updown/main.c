@@ -7,11 +7,11 @@
 
 #include <libvici.h>
 
-#include <naas-common/utils.h>
-#include <naas-common/log.h>
-#include <naas-common/strbuf.h>
-#include <naas-common/list.h>
-#include <naas-vpp/api.h>
+#include <libnaas/utils.h>
+#include <libnaas/log.h>
+#include <libnaas/strbuf.h>
+#include <libnaas/list.h>
+#include <libnaas/api.h>
 
 #define PROG_NAME "naas-route-based-updown"
 #define REQMSG_LEN_MAX 2048

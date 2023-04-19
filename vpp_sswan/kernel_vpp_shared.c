@@ -36,7 +36,7 @@
 #undef vl_typedefs
 #undef vl_endianfun
 
-#include <naas-vpp/api.h>
+#include <libnaas/api.h>
 
 typedef struct private_vac_t private_vac_t;
 typedef struct vl_api_header_t vl_api_header_t;

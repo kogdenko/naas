@@ -1,10 +1,51 @@
+import os
 import platform
+import subprocess
 
 COMPILER='clang'
 
 def die(s):
     print(s)
     Exit(1)
+
+
+def bytes_to_str(b):
+    return b.decode('utf-8').strip()
+
+
+def system(cmd, failure_tollerance=False):
+    proc = subprocess.Popen(cmd.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        out, err = proc.communicate()
+    except:
+        proc.kill();
+        die("Command '%s' failed, exception: '%s'" % (cmd, sys.exc_info()[0]))
+
+    out = bytes_to_str(out)
+    err = bytes_to_str(err)
+    rc = proc.returncode
+
+#    print("$ %s # $? = %d\n%s\n%s" % (cmd, rc, out, err))
+
+    if rc != 0 and not failure_tollerance:
+        die("Command '%s' failed, return code: %d" % (cmd, rc))
+
+    return rc, out, err
+
+
+def get_git_version():
+    if True:
+        cmd = "git describe --tags --always"
+        rc, out, _ = system(cmd)
+        if rc != 0:
+            die("Cannot extract gbtcp version")
+        return out.strip()
+    else:
+        cmd = "git log -1 --format=%H"
+        commit = system(cmd)[1].strip()
+        if len(commit) != 40:
+            die("Cannot extract gbtcp version")
+        return commit
 
 
 def flags_to_string(flags):
@@ -17,10 +58,6 @@ def install(env, item, path):
 
 
 def install_lib(env, lib):
-#	if platform.architecture()[0] == "64bit":
-#		lib_path = '/usr/lib64'
-#	else:
-#		lib_path = '/usr/lib'
 	lib_path = '/usr/local/lib'
 	install(env, lib, lib_path)
 
@@ -42,12 +79,14 @@ main()
 }
 """
 
+	global libnaas_ld
+
 	ldflags = [
 		'-L/opt/libnl-227.27.0/lib',
 		'-l:libnl-3.so.200.27.0',
 		'-l:libnl-route-3.so.200.27.0',
 		'-l:libnl-cli-3.so.200.27.0',
-		'-lnaas',
+		libnaas_ld,
 	]
 
 	cflags = [
@@ -74,6 +113,8 @@ main()
 
 
 def build_libnaas(env):
+	global libnaas_name
+
 	srcs = [
 		'libnaas/utils.c',
 		'libnaas/strbuf.c',
@@ -92,7 +133,7 @@ def build_libnaas(env):
 	env = env.Clone()
 	env.Append(LINKFLAGS = flags_to_string(ldflags))
 
-	lib = env.SharedLibrary('bin/libnaas.so', srcs)
+	lib = env.SharedLibrary('bin/' + libnaas_name, srcs)
 	install_lib(env, lib)
 	return lib
 
@@ -106,6 +147,7 @@ def get_sswan():
 
 
 def vpp_sswan(env, deps):
+	global libnaas_ld
 	sswan = get_sswan()
 
 	cflags = [
@@ -123,11 +165,11 @@ def vpp_sswan(env, deps):
 
 	ldflags = [
 		'-lvppinfra',
-		'-lvlibmemoryclient',
+#		'-lvlibmemoryclient',
 		'-lvlibapi',
 		'-lsvm',
 		'-lvppapiclient',
-		'-lnaas',
+		libnaas_ld,
 	]
 
 	env = env.Clone()
@@ -140,6 +182,7 @@ def vpp_sswan(env, deps):
 
 
 def naas_route_based_updown(env, deps):
+	global libnaas_ld
 	sswan = get_sswan() 
 
 	cflags = [
@@ -150,7 +193,7 @@ def naas_route_based_updown(env, deps):
 		'-L/usr/lib/ipsec',
 		'-lstrongswan',
 		'-lvici',
-		'-lnaas',
+		libnaas_ld,
 	]
 
 	srcs = [
@@ -165,6 +208,79 @@ def naas_route_based_updown(env, deps):
 		Requires(prog, dep)
 	install_prog(env, prog)
 	return prog
+
+
+def build_deb(env):
+	global git_version
+
+	DEBNAME = "naas"
+	DEBVERSION = git_version
+	DEBMAINT = "Konstantin Kogdenko <k.kogdenko@gmail.com>"
+	DEBARCH = "amd64"
+	DEBDEPENDS = "vpp, vpp-dev, libvppinfra, libvppinfra-dev, libstrongswan, strongswan-swanctl"
+	DEBDESC = "MTS Naas Package"
+
+	libnl_path = "opt/libnl-227.27.0/lib/"
+	libnl = libnl_path + "libnl-3.so.200.27.0"
+	libnl_route = libnl_path + "libnl-route-3.so.200.27.0"
+	libnl_cli = libnl_path + "libnl-cli-3.so.200.27.0"
+
+	vpp_lcpd = "naas-vpp-lcpd"
+	route_based_updown = "naas-route-based-updown"
+
+	DEBFILES = [
+		("etc/ld.so.conf.d/ipsec.conf", "#libnaas/ld-ipsec.conf"),
+		("usr/local/lib/" + libnaas_name, "#bin/" + libnaas_name),
+		(libnl, "/" + libnl),
+		(libnl_route, "/" + libnl_route),
+		(libnl_cli, "/" + libnl_cli),
+		("usr/local/bin/" + vpp_lcpd, "#bin/" + vpp_lcpd),
+		("usr/local/bin/" + route_based_updown, "#bin/" + route_based_updown),
+	]
+
+	debpkg = '#%s_%s_%s.deb' % (DEBNAME, git_version, DEBARCH)
+
+	env.Alias("deb", debpkg)
+
+	DEBCONTROLFILE = os.path.join(DEBNAME, "DEBIAN/control")
+
+	for f in DEBFILES:
+		dest = os.path.join(DEBNAME, f[0])
+		env.Depends(debpkg, dest)
+		env.Command(dest, f[1], Copy('$TARGET','$SOURCE'))
+		env.Depends(DEBCONTROLFILE, dest)
+
+	CONTROL_TEMPLATE = """
+Package: %s
+Priority: extra
+Section: misc
+Installed-Size: %s
+Maintainer: %s
+Architecture: %s
+Version: %s
+Depends: %s
+Description: %s
+
+"""
+
+	env.Depends(debpkg, DEBCONTROLFILE)
+	env.Depends(DEBCONTROLFILE, env.Value(git_version))
+
+	def make_control(target=None, source=None, env=None):
+		installed_size = 0
+		for i in DEBFILES:
+			installed_size += os.stat(str(env.File(i[1])))[6]
+		control_info = CONTROL_TEMPLATE % (
+			DEBNAME, installed_size, DEBMAINT, DEBARCH,
+			git_version, DEBDEPENDS, DEBDESC)
+		f = open(str(target[0]), 'w')
+		f.write(control_info)
+		f.close()
+
+	env.Command(DEBCONTROLFILE, None, make_control)
+
+	env.Command(debpkg, DEBCONTROLFILE,
+        	    "fakeroot dpkg-deb -b %s %s" % ("%s" % DEBNAME, "$TARGET"))
 
 
 ldflags = [
@@ -183,6 +299,10 @@ env = Environment(CC = COMPILER)
 env.Append(CFLAGS = flags_to_string(cflags))
 env.Append(LINKFLAGS = flags_to_string(ldflags))
 
+git_version = get_git_version()
+libnaas_name = 'libnaas.so.' + git_version
+libnaas_ld = '-l:' + libnaas_name
+
 env['LINKCOM'] = '$LINK -o $TARGET $SOURCES $LINKFLAGS $__RPATH $_LIBDIRFLAGS $_LIBFLAGS'
 
 AddOption('--sswan', type='string', action='store', help='Strongswan sources')
@@ -191,3 +311,6 @@ libnaas = build_libnaas(env)
 libstrongswan_kernel_vpp = vpp_sswan(env, [ libnaas ])
 naas_vpp_lcpd(env, [ libnaas, libstrongswan_kernel_vpp ])
 naas_route_based_updown(env, [ libnaas ])
+
+if 'deb' in COMMAND_LINE_TARGETS:
+	build_deb(env)

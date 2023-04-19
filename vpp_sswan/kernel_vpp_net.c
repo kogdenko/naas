@@ -608,7 +608,6 @@ update_addrs_dump_handler (void *user0, void *user1, void *data, int len)
 static void
 update_addrs (private_kernel_vpp_net_t *this, iface_t *entry)
 {
-  int rc;
   vl_api_ip_address_dump_t mp;
   linked_list_t *addrs;
   host_t *host;
@@ -621,7 +620,7 @@ update_addrs (private_kernel_vpp_net_t *this, iface_t *entry)
   mp.is_ipv6 = 0;
 
   addrs = linked_list_create ();
-  rc = naas_api_dump(&mp, sizeof(mp), VL_API_IP_ADDRESS_DETAILS_CRC,
+  naas_api_dump(&mp, sizeof(mp), VL_API_IP_ADDRESS_DETAILS_CRC,
           update_addrs_dump_handler, addrs, NULL);
 
   mp.is_ipv6 = 1;

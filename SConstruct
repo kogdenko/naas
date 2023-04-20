@@ -236,6 +236,7 @@ def build_deb(env):
 		(libnl_cli, "/" + libnl_cli),
 		("usr/local/bin/" + vpp_lcpd, "#bin/" + vpp_lcpd),
 		("usr/local/bin/" + route_based_updown, "#bin/" + route_based_updown),
+		("usr/local/bin/naas-updown.sh", "#naas-route-based-updown/updown.sh")
 	]
 
 	debpkg = '#%s_%s_%s.deb' % (DEBNAME, git_version, DEBARCH)

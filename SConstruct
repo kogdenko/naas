@@ -1,4 +1,5 @@
 import os
+import shutil
 import platform
 import subprocess
 
@@ -246,6 +247,8 @@ def build_deb(env):
 	env.Alias("deb", debpkg)
 
 	DEBCONTROLFILE = os.path.join(DEBNAME, "DEBIAN/control")
+
+	shutil.rmtree(DEBNAME)
 
 	for f in DEBFILES:
 		dest = os.path.join(DEBNAME, f[0])

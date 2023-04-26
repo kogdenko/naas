@@ -16,7 +16,6 @@
 //static int g_naas_api_vac_reply_id;
 //static void *g_naas_api_vac_user;
 //static naas_api_vac_f g_naas_api_vac_fn;
-static char g_client_name_buf[1024];
 
 
 static void
@@ -60,11 +59,13 @@ naas_api_sr_behavior_api_str(int behavior)
 }
 
 static int
-naas_vac_reconnect()
+naas_vac_reconnect(const char *client_name)
 {
 	int rc;
+	char client_name_buf[1024];
 
-	rc = vac_connect(g_client_name_buf, NULL, NULL, 1024);
+	naas_strzcpy(client_name_buf, client_name, sizeof(client_name_buf));
+	rc = vac_connect(client_name_buf, NULL, NULL, 1024);
 	if (rc != 0) {
 		naas_logf(LOG_ERR, 0, "[VPP][API] Connection failed");
 		return rc;
@@ -119,8 +120,7 @@ naas_api_init(const char *client_name)
 	int rc;
 
 	clib_mem_init(0, 64 << 20); // 20 Mb
-	naas_strzcpy(g_client_name_buf, client_name, sizeof(g_client_name_buf));
-	rc = naas_vac_reconnect();
+	rc = naas_vac_reconnect(client_name);
 	return rc;
 }
 
@@ -825,6 +825,7 @@ naas_api_ipip_add_tunnel(int instance, struct in_addr src, struct in_addr dst,
 	rc = NAAS_API_INVOKE(mp, rp);
 	if (rc == 0) {
 		rc = ntohl(rp->retval);
+		printf("retval=%d\n", rc);
 		ret->sw_if_index = ntohl(rp->sw_if_index);
 		naas_api_msg_free(rp);
 	}

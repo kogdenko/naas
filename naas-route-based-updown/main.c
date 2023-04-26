@@ -226,7 +226,7 @@ finalize_request(struct request *req)
 	int rc, ipip_sw_if_index;
 	struct naas_ipip_add_tunnel_ret naas_ipip_add_tunnel_ret;
 
-	rc = naas_api_ipip_add_tunnel(req->uniqueid, req->me, req->peer, &naas_ipip_add_tunnel_ret);
+	rc = naas_api_ipip_add_tunnel(req->reqid, req->me, req->peer, &naas_ipip_add_tunnel_ret);
 	if (rc != 0) {
 		naas_logf(LOG_ERR, -rc, "ipip_add_tunnel() failed");
 		return rc;

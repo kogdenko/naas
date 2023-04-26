@@ -22,6 +22,7 @@
 struct request {
 	struct naas_dlist list;
 	uint32_t reqid;
+	uint32_t uniqueid;
 	struct in_addr me;
 	struct in_addr peer;
 	struct in_addr peer_client;
@@ -49,6 +50,8 @@ static void
 list_sa_set_spi(struct list_sa_udata *udata, uint32_t reqid, int dir, uint32_t spi)
 {
 	struct request *req, *tmp;
+
+	naas_logf(LOG_DEBUG, 0, "vici: list_sa: reqid=%u, spi=%u", reqid, spi);
 
 	NAAS_DLIST_FOREACH_SAFE(req, udata->reqq, list, tmp) {
 		if (reqid == req->reqid) {
@@ -223,7 +226,7 @@ finalize_request(struct request *req)
 	int rc, ipip_sw_if_index;
 	struct naas_ipip_add_tunnel_ret naas_ipip_add_tunnel_ret;
 
-	rc = naas_api_ipip_add_tunnel(req->reqid, req->me, req->peer, &naas_ipip_add_tunnel_ret);
+	rc = naas_api_ipip_add_tunnel(req->uniqueid, req->me, req->peer, &naas_ipip_add_tunnel_ret);
 	if (rc != 0) {
 		naas_logf(LOG_ERR, -rc, "ipip_add_tunnel() failed");
 		return rc;
@@ -402,7 +405,7 @@ out:
 }
 
 static int
-send_request(int fd, uint32_t reqid, struct in_addr me, struct in_addr peer,
+send_request(int fd, uint32_t reqid, uint32_t uniqueid, struct in_addr me, struct in_addr peer,
 		struct in_addr peer_client, unsigned int peer_client_mask)
 {
 	int rc;
@@ -410,7 +413,7 @@ send_request(int fd, uint32_t reqid, struct in_addr me, struct in_addr peer,
 	struct naas_strbuf sb;
 
 	naas_strbuf_init(&sb, req, sizeof(req));
-	naas_strbuf_addf(&sb, "%u %s ", reqid, inet_ntoa(me));
+	naas_strbuf_addf(&sb, "%u %u %s ", reqid, uniqueid, inet_ntoa(me));
 	naas_strbuf_addf(&sb, "%s ", inet_ntoa(peer));
 	naas_strbuf_addf(&sb, "%s/%u\n", inet_ntoa(peer_client), peer_client_mask);
 
@@ -421,6 +424,9 @@ send_request(int fd, uint32_t reqid, struct in_addr me, struct in_addr peer,
 	} else {
 		rc = 0;
 	}
+
+	naas_logf(LOG_DEBUG, -rc, "send request: '%s'", naas_strbuf_cstr(&sb));
+
 	return rc;
 }
 
@@ -429,10 +435,10 @@ handle_request(struct naas_dlist *reqq, char *reqmsg, int reqmsg_len)
 {
 	int i, argc;
 	unsigned int peer_client_mask;
-	uint32_t reqid;
+	uint32_t reqid, uniqueid;
 	struct in_addr me, peer, peer_client;
 	struct request *req;
-	char *s, *argv[4];
+	char *s, *argv[5];
 
 	argc = 0;	
 	for (s = strtok(reqmsg, " \r\n\t"); s != NULL; s = strtok(NULL, " \r\n\t")) {
@@ -441,23 +447,28 @@ handle_request(struct naas_dlist *reqq, char *reqmsg, int reqmsg_len)
 		}
 	}
 
-	if (argc < 4) {
+	if (argc < 5) {
 		goto err;
 	}
 	reqid = strtoul(argv[0], NULL, 10);
-	if (naas_inet_aton(argv[1], &me, NULL)) {
+	uniqueid = strtoul(argv[1], NULL, 10);
+	if (naas_inet_aton(argv[2], &me, NULL)) {
 		goto err;
 	}
-	if (naas_inet_aton(argv[2], &peer, NULL)) {
+	if (naas_inet_aton(argv[3], &peer, NULL)) {
 		goto err;
 	}
-	if (naas_inet_aton(argv[3], &peer_client, &peer_client_mask)) {
+	if (naas_inet_aton(argv[4], &peer_client, &peer_client_mask)) {
 		goto err;
 	}
+
+	naas_logf(LOG_DEBUG, 0, "recv request: %s %s %s %s %s",
+			argv[0], argv[1], argv[2], argv[3], argv[4]);
 	
 	req = naas_xmalloc(sizeof(*req));
 	memset(req, 0, sizeof(*req));
 	req->reqid = reqid;
+	req->uniqueid = uniqueid;
 	req->me = me;
 	req->peer = peer;
 	req->peer_client = peer_client;
@@ -509,7 +520,9 @@ server_loop(lfd)
 
 #ifdef VICI_RESOLVE
 		if (!naas_dlist_is_empty(&reqq)) {
+			naas_logf(LOG_DEBUG, 0, "vici: list_sas");
 			search_sa(&reqq);
+			naas_logf(LOG_DEBUG, 0, "vici: list_sas done");
 		}
 #endif
 	}
@@ -537,7 +550,7 @@ print_usage()
 int
 main(int argc, char **argv)
 {
-	int rc, fd, dflag, Lflag, Cflag, opt, reqid,
+	int rc, fd, dflag, Lflag, Cflag, opt, reqid, uniqueid,
 			long_option_index, log_options, log_level;
 	unsigned int peer_client_mask;
 	const char *long_option_name, *loop;
@@ -548,6 +561,7 @@ main(int argc, char **argv)
 		{"log-level", required_argument, 0, 'l' },
 		{"log-console", no_argument, 0, 0 },
 		{"reqid", required_argument, 0, 0 },
+		{"uniqueid", required_argument, 0, 0 },
 		{"me", required_argument, 0, 0 },
 		{"peer", required_argument, 0, 0 },
 		{"peer-client", required_argument, 0, 0 },
@@ -559,6 +573,7 @@ main(int argc, char **argv)
 	Cflag = 0;
 	log_options = 0;
 	reqid = -1;
+	uniqueid = -1;
 	loop = NULL;
 	me.s_addr = peer.s_addr = peer_client.s_addr = INADDR_NONE;
 	while ((opt = getopt_long(argc, argv, "hdL:C:l:", long_options, &long_option_index)) != -1) {
@@ -569,6 +584,8 @@ main(int argc, char **argv)
 				log_options = LOG_CONS;
 			} else if (!strcmp(long_option_name, "reqid")) {
 				reqid = strtoul(optarg, NULL, 10);
+			} else if (!strcmp(long_option_name, "uniqueid")) {
+				uniqueid = strtoul(optarg, NULL, 10);
 			} else if (!strcmp(long_option_name, "me")) {
 				if (naas_inet_aton(optarg, &me, NULL)) {
 					naas_print_invalidarg("--me", optarg);
@@ -604,6 +621,7 @@ main(int argc, char **argv)
 				print_usage();
 				return EXIT_FAILURE;
 			}
+			naas_set_log_level(log_level);
 			break;
 		case 'h':
 			print_usage();
@@ -644,6 +662,12 @@ main(int argc, char **argv)
 			return EXIT_FAILURE;
 		}
 
+		if (uniqueid < 0) {
+			naas_print_unspecifiedarg("--uniqueid");
+			print_usage();
+			return EXIT_FAILURE;
+		}
+
 		if (me.s_addr == INADDR_NONE) {
 			naas_print_unspecifiedarg("--me");
 			print_usage();
@@ -659,7 +683,7 @@ main(int argc, char **argv)
 		rc = connect_tolocalport(Cflag);
 		if (rc > 0) {
 			fd = rc;
-			rc = send_request(fd, reqid, me, peer,
+			rc = send_request(fd, reqid, uniqueid, me, peer,
 					peer_client, peer_client_mask);
 			close(fd);
 		}

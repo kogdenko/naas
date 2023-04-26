@@ -249,7 +249,7 @@ naas_api_sw_interface_details(void *user0, void *user, void *data, int len)
 		(*handler)(user, &interface);
 	}
 
-	naas_logf(LOG_NOTICE, 0,
+	naas_logf(LOG_DEBUG, 0,
 "[VPP][API][sw_interface_dump] interfcae_name='%s', sw_if_index=%d",
 			interface.interface_name, interface.sw_if_index);
 
@@ -309,7 +309,7 @@ naas_api_sw_interface_set_flags(uint32_t sw_if_index, vl_api_if_status_flags_t f
 		naas_api_msg_free(rp);
 	}
 
-	naas_logf(LOG_NOTICE, -rc,
+	naas_logf(LOG_INFO, -rc,
 "[VPP][API][sw_interface_set_flags] sw_if_index=%u, flags=%x, rc=%d",
 			sw_if_index, flags, rc);
 
@@ -338,7 +338,7 @@ naas_api_sw_interface_set_unnumbered(int is_add, uint32_t sw_if_index,
 		naas_api_msg_free(rp);
 	}
 
-	naas_logf(LOG_NOTICE, -rc,
+	naas_logf(LOG_INFO, -rc,
 "[VPP][API][sw_interface_set_unnumbered] is_add=%d, sw_if_index=%u, unnumbered_sw_if_index=%u",
 			is_add, sw_if_index, unnumbered_sw_if_index);
 
@@ -373,7 +373,7 @@ naas_api_ip_route_add_del(int is_add, struct in_addr prefix, int prefixlen, int 
 		naas_api_msg_free(rp);
 	}
 
-	naas_logf(LOG_NOTICE, -rc,
+	naas_logf(LOG_INFO, -rc,
 "[VPP][API][ip_route_add_del] is_add=%d, prefix=%s/%u, sw_if_index=%u",
 			is_add, inet_ntoa(prefix), prefixlen, sw_if_index);
 
@@ -405,7 +405,7 @@ naas_api_lcp_itf_pair_details(naas_api_lcp_itf_pair_get_f handler, void *user, c
 		(*handler)(user, phy_sw_if_index, rc);
 	}
 
-	naas_logf(LOG_NOTICE, 0,
+	naas_logf(LOG_INFO, 0,
 "[VPP][API][lcp_itf_pair_get] host_if_name='%s', linux_if_index=%d, vpp_if_index=%d",
 			details->host_if_name, rc, phy_sw_if_index);
 
@@ -752,7 +752,7 @@ naas_api_ipsec_tunnel_protect_update(uint32_t sw_if_index, uint32_t sa_in, uint3
 		naas_api_msg_free(rp);
 	}
 
-	naas_logf(LOG_NOTICE, -rc,
+	naas_logf(LOG_INFO, -rc,
 "[VPP][API][ipsec_tunnel_protect_update] sw_if_index=%u, sa_in=%u, sa_out=%u",
 			sw_if_index, sa_in, sa_out);
 
@@ -761,16 +761,18 @@ naas_api_ipsec_tunnel_protect_update(uint32_t sw_if_index, uint32_t sa_in, uint3
 
 // VPP ctl:
 // show ipsec sa
-int
-naas_api_ipsec_sa_details(naas_api_ipsec_sa_dump_f handler, void *user, char *data, int len)
+static int
+naas_api_ipsec_sa_details(void *user0, void *user, void *data, int len)
 {
 	uint32_t sad_id, spi;
+	naas_api_ipsec_sa_dump_f handler;
 	vl_api_ipsec_sa_details_t *details;
 
 	if (len != sizeof(*details)) {
 		return -EINVAL;
 	}
 
+	handler = user0;
 	details = (void *)data;
 	sad_id = ntohl(details->entry.sad_id);
 	spi = ntohl(details->entry.spi);
@@ -778,46 +780,23 @@ naas_api_ipsec_sa_details(naas_api_ipsec_sa_dump_f handler, void *user, char *da
 		(*handler)(user, sad_id, spi);
 	}
 
-	naas_logf(LOG_NOTICE, 0, "[VPP][API][ipsec_sa_dump] sad_id=%u, spi=%x", sad_id, spi);
+	naas_logf(LOG_DEBUG, 0, "[VPP][API][ipsec_sa_dump] sad_id=%u, spi=%x", sad_id, spi);
 	return 0;
 }
 
-// TODO: naas_api_dump
 int
 naas_api_ipsec_sa_dump(naas_api_ipsec_sa_dump_f handler, void *user)
 {
-	int rc, len, msg_id, details_msg_id, pong_msg_id, data_msg_id;
-	char *data;
+	int rc, msg_id;
 	vl_api_ipsec_sa_dump_t mp;
 
 	msg_id = vac_get_msg_index(VL_API_IPSEC_SA_DUMP_CRC);
-	details_msg_id = vac_get_msg_index(VL_API_IPSEC_SA_DETAILS_CRC);
 
 	clib_memset(&mp, 0, sizeof(mp));
 	mp._vl_msg_id = ntohs(msg_id);
 
-	naas_vac_write((void *)&mp, sizeof(mp));
-
-	pong_msg_id = naas_api_ping(123);
-
-	do {
-		rc = naas_vac_read(&data, 5);
-		if (rc < 0) {
-			return rc;
-		}
-		len = rc;
-
-		data_msg_id = ntohs(*((u16 *)data));
-		if (data_msg_id == pong_msg_id) {
-			;
-		} else if (data_msg_id == details_msg_id) {
-			rc = naas_api_ipsec_sa_details(handler, user, data, len);
-		} else {
-			rc = -EBADMSG;
-		}
-
-		naas_api_msg_free(data);
-	} while (data_msg_id != pong_msg_id && rc == 0);
+	rc = naas_api_dump(&mp, sizeof(mp), VL_API_IPSEC_SA_DETAILS_CRC,
+			naas_api_ipsec_sa_details, handler, user);
 
 	return rc;
 }
@@ -850,7 +829,7 @@ naas_api_ipip_add_tunnel(int instance, struct in_addr src, struct in_addr dst,
 		naas_api_msg_free(rp);
 	}
 
-	naas_logf(LOG_NOTICE, -rc,
+	naas_logf(LOG_INFO, -rc,
 "[VPP][API][ipip_add_tunnel] instance=%u, src=%s, dst=%s, sw_if_index=%u, rc=%d",
 			instance, NAAS_INET_NTOA(&src, srcbuf), NAAS_INET_NTOA(&dst, dstbuf),
 			ret->sw_if_index, rc);

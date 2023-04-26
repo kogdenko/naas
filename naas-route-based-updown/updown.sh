@@ -27,7 +27,7 @@ case "${PLUTO_VERB}" in
 
 	#echo "START"
 
-	naas-route-based-updown -C 6000 --reqid ${PLUTO_REQID} --me ${PLUTO_REQID} --peer ${PLUTO_PEER} --peer-client ${PLUTO_PEER_CLIENT}
+	naas-route-based-updown -C 6000 --reqid ${PLUTO_UNIQUEID} --me ${PLUTO_ME} --peer ${PLUTO_PEER} --peer-client ${PLUTO_PEER_CLIENT}
 
 	#echo "DONE"
 

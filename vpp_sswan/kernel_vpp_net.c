@@ -155,9 +155,6 @@ static status_t
 manage_route (private_kernel_vpp_net_t *this, bool add, chunk_t dst,
 	      uint8_t prefixlen, host_t *gtw, char *name)
 {
-  //net_update_thread_fn (this);
-
-#if 0
   char *out;
   int out_len;
   enumerator_t *enumerator;
@@ -242,7 +239,7 @@ manage_route (private_kernel_vpp_net_t *this, bool add, chunk_t dst,
       return FAILED;
     }
   free (out);
-#endif
+
   return SUCCESS;
 }
 
@@ -352,10 +349,6 @@ get_route (private_kernel_vpp_net_t *this, host_t *dest, int prefix,
   enumerator_t *enumerator;
   iface_t *entry;
   int family;
-
-  //net_update_thread_fn (this);
-
-  return addr;
 
   path.sw_if_index = ~0;
   path.preference = ~0;

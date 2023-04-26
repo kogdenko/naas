@@ -233,11 +233,7 @@ static uint32_t get_sw_if_index ();
 static int
 set_arp (char *ipStr, char *if_name, bool add)
 {
-  return SUCCESS;
-#if 0
-  char *out = NULL;
-  int out_len = 0;
-  vl_api_ip_neighbor_add_del_t *mp = NULL;
+  vl_api_ip_neighbor_add_del_t mp;
   vl_api_ip_neighbor_add_del_reply_t *rmp = NULL;
   int rc = SUCCESS;
   uint32_t sw_if_index = ~0;
@@ -261,8 +257,7 @@ set_arp (char *ipStr, char *if_name, bool add)
     }
   DBG2 (DBG_KNL, "from kernel read mac\n");
 
-  mp = vl_msg_api_alloc (sizeof (*mp));
-  memset (mp, 0, sizeof (*mp));
+  memset (&mp, 0, sizeof (mp));
   sw_if_index = get_sw_if_index (if_name);
   if (sw_if_index == ~0)
     {
@@ -282,33 +277,36 @@ set_arp (char *ipStr, char *if_name, bool add)
 		  &mac[2], &mac[3], &mac[4], &mac[5]);
 	  u16 msg_id =
 	    vl_msg_api_get_msg_index ((u8 *) "ip_neighbor_add_del_0607c257");
-	  mp->_vl_msg_id = htons (msg_id);
-	  mp->is_add = add;
-	  memcpy (mp->neighbor.ip_address.un.ip4, (u8 *) &addr, sizeof (addr));
-	  mp->neighbor.ip_address.af = 0;
-	  memcpy (mp->neighbor.mac_address, mac, 6);
-	  mp->neighbor.sw_if_index = htonl (sw_if_index);
-	  mp->neighbor.flags = 1;
+	  mp._vl_msg_id = htons (msg_id);
+	  mp.is_add = add;
+	  memcpy (mp.neighbor.ip_address.un.ip4, (u8 *) &addr, sizeof (addr));
+	  mp.neighbor.ip_address.af = 0;
+	  memcpy (mp.neighbor.mac_address, mac, 6);
+	  mp.neighbor.sw_if_index = htonl (sw_if_index);
+	  mp.neighbor.flags = 1;
 
-	  VAC_LOG("ip_neighbor_add_del");
-	  if (vac->send (vac, (char *) mp, sizeof (*mp), &out, &out_len))
-	    {
+
+          rc = NAAS_API_INVOKE (mp, rmp);
+          if (rc)
+            {
 	      DBG1 (DBG_KNL, "vac %s neighbor entry",
 		    add ? "adding" : "removing");
 	      fclose (fp);
 	      goto error;
-	    }
-	  rmp = (void *) out;
-	  if (rmp->retval)
-	    {
+
+             }
+          rc = ntohl (rmp->retval);
+          naas_api_msg_free (rmp);
+          if (rc)
+            {
 	      DBG1 (DBG_KNL, "%s neighbor add rv:%d", add ? "add" : "remove",
 		    ntohl (rmp->retval));
 	      fclose (fp);
 	      goto error;
-	    }
+
+             }
+
 	  fclose (fp);
-	  free (out);
-	  vl_msg_api_free (mp);
 	  free (buffer);
 
 	  return rc;
@@ -322,15 +320,12 @@ set_arp (char *ipStr, char *if_name, bool add)
     }
 
 error:
-  free (out);
-  vl_msg_api_free (mp);
   if (buffer != NULL)
     {
       free (buffer);
       buffer = NULL;
     }
   return rc;
-#endif
 }
 
 static int

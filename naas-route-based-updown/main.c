@@ -38,7 +38,7 @@ static uint32_t g_loop_sw_if_index;
 
 #define VICI_RESOLVE
 
-static int finalize_request(struct request *req);
+static void finalize_request(struct request *req);
 
 #ifdef VICI_RESOLVE
 struct list_sa_udata {
@@ -115,7 +115,7 @@ list_sas(struct naas_dlist *reqq, struct naas_dlist *found)
 	conn = vici_connect(NULL);
 	if (!conn) {
 		rc = -errno;
-		naas_logf(LOG_ERR, errno, "vici_connect() failed");
+		naas_logf(LOG_ERR, "vici_connect() failed");
 		return rc;
 	}
 
@@ -124,7 +124,7 @@ list_sas(struct naas_dlist *reqq, struct naas_dlist *found)
 	rc = vici_register(conn, "list-sa", list_sa, &udata);
 	if (rc != 0) {
 		rc = -errno;
-		naas_logf(LOG_ERR, errno, "vici_register() failed");
+		naas_logf(LOG_ERR, "vici_register() failed");
 		goto err;
 	}
 
@@ -136,7 +136,7 @@ list_sas(struct naas_dlist *reqq, struct naas_dlist *found)
 		vici_free_res(res);
 	} else {
 		rc = -errno;
-		naas_logf(LOG_ERR, errno, "vici_submit() failed");
+		naas_logf(LOG_ERR, "vici_submit() failed");
 	}
 err:
 	vici_deinit();
@@ -220,45 +220,25 @@ get_sw_if_index(const char *loop)
 	return sw_if_index;
 }
 
-static int
+static void
 finalize_request(struct request *req)
 {
-	int rc, ipip_sw_if_index;
+	int ipip_sw_if_index;
+	naas_err_t err;
 	struct naas_ipip_add_tunnel_ret naas_ipip_add_tunnel_ret;
 
-	rc = naas_api_ipip_add_tunnel(req->reqid, req->me, req->peer, &naas_ipip_add_tunnel_ret);
-	if (rc != 0) {
-		naas_logf(LOG_ERR, -rc, "ipip_add_tunnel() failed");
-		return rc;
-	}
+	err = naas_api_ipip_add_tunnel(req->reqid, req->me, req->peer, &naas_ipip_add_tunnel_ret);
 	ipip_sw_if_index = naas_ipip_add_tunnel_ret.sw_if_index;
-
-	rc = naas_api_sw_interface_set_unnumbered(1, g_loop_sw_if_index, ipip_sw_if_index);
-	if (rc != 0) {
-		naas_logf(LOG_ERR, -rc, "sw_interface_set_unnumbered() failed");
-		return rc;
+	if (ipip_sw_if_index == ~0) {
+		naas_err_logf(LOG_ERR, err, "ipip_add_tunnel() failed");
+		return;
 	}
 
-	rc = naas_api_sw_interface_set_flags(ipip_sw_if_index, IF_STATUS_API_FLAG_ADMIN_UP);
-	if (rc != 0) {
-		naas_logf(LOG_ERR, -rc, "sw_interface_set_flags() failed");
-		return rc;
-	}
-
-	rc = naas_api_ip_route_add_del(1, req->peer_client, req->peer_client_mask, ipip_sw_if_index);
-	if (rc != 0) {
-		naas_logf(LOG_ERR, -rc, "ip_route_add_del() failed");
-		return rc;
-	}
-
-	rc = naas_api_ipsec_tunnel_protect_update(ipip_sw_if_index,
+	naas_api_sw_interface_set_unnumbered(1, g_loop_sw_if_index, ipip_sw_if_index);
+	naas_api_sw_interface_set_flags(ipip_sw_if_index, IF_STATUS_API_FLAG_ADMIN_UP);
+	naas_api_ip_route_add_del(1, req->peer_client, req->peer_client_mask, ipip_sw_if_index);
+	naas_api_ipsec_tunnel_protect_update(ipip_sw_if_index,
 			req->sa[REQ_IN], req->sa[REQ_OUT]);
-	if (rc != 0) {
-		naas_logf(LOG_ERR, -rc, "ipsec_tunnel_protect_update() failed");
-		return rc;
-	}
-
-	return rc;
 }
 
 static int
@@ -308,7 +288,7 @@ listen_onlocalport(int port)
 	rc = socket(AF_INET, SOCK_STREAM, 0);
 	if (rc == -1) {
 		rc = -errno;
-		naas_logf(LOG_ERR, errno, "socket(AF_INET, SOCK_STREAM) failed");
+		naas_errno_logf(LOG_ERR, errno, "socket(AF_INET, SOCK_STREAM) failed");
 		return rc;
 	}
 	opt = 1;
@@ -318,26 +298,26 @@ listen_onlocalport(int port)
 	rc = bind(fd, (struct sockaddr *)&sin, sizeof(sin));
 	if (rc == -1) {
 		rc = -errno;
-		naas_logf(LOG_ERR, errno, "bind() failed");
+		naas_errno_logf(LOG_ERR, errno, "bind() failed");
 		goto err;
 	}
 	rc = listen(fd, 5);
 	if (rc == -1) {
 		rc = -errno;
-		naas_logf(LOG_ERR, errno, "listen() failed");
+		naas_errno_logf(LOG_ERR, errno, "listen() failed");
 		goto err;
 	}
 	rc = fcntl(fd, F_GETFL, 0);
 	if (rc == -1) {
 		rc = -errno;
-		naas_logf(LOG_ERR, errno, "fcntl(F_GETFL) failed");
+		naas_errno_logf(LOG_ERR, errno, "fcntl(F_GETFL) failed");
 		goto err;
 	}
 	flags = rc|O_NONBLOCK;
 	rc = fcntl(fd, F_SETFL, flags);
 	if (rc == -1) {
 		rc = -errno;
-		naas_logf(LOG_ERR, errno, "fcntl(F_SETFL) failed");
+		naas_errno_logf(LOG_ERR, errno, "fcntl(F_SETFL) failed");
 		goto err;
 	}
 
@@ -361,14 +341,14 @@ connect_tolocalport(int port)
 	rc = socket(AF_INET, SOCK_STREAM, 0);
 	if (rc == -1) {
 		rc = -errno;
-		naas_logf(LOG_ERR, errno, "socket(AF_INET, SOCK_STREAM) failed");
+		naas_errno_logf(LOG_ERR, errno, "socket(AF_INET, SOCK_STREAM) failed");
 		return rc;
 	}
 	fd = rc;
 	rc = connect(fd, (struct sockaddr *)&sin, sizeof(sin));
 	if (rc == -1) {
 		rc = -errno;
-		naas_logf(LOG_ERR, errno, "connect() failed");
+		naas_errno_logf(LOG_ERR, errno, "connect() failed");
 		close(fd);
 		return rc;
 	}
@@ -420,12 +400,12 @@ send_request(int fd, uint32_t reqid, uint32_t uniqueid, struct in_addr me, struc
 	rc = send(fd, naas_strbuf_cstr(&sb), sb.sb_len, 0);
 	if (rc < 0) {
 		rc = -errno;
-		naas_logf(LOG_ERR, errno, "send() failed");
+		naas_errno_logf(LOG_ERR, errno, "send() failed");
 	} else {
 		rc = 0;
 	}
 
-	naas_logf(LOG_DEBUG, -rc, "send request: '%s'", naas_strbuf_cstr(&sb));
+	naas_errno_logf(LOG_DEBUG, -rc, "send request: '%s'", naas_strbuf_cstr(&sb));
 
 	return rc;
 }
@@ -520,9 +500,7 @@ server_loop(lfd)
 
 #ifdef VICI_RESOLVE
 		if (!naas_dlist_is_empty(&reqq)) {
-			naas_logf(LOG_DEBUG, 0, "vici: list_sas");
 			search_sa(&reqq);
-			naas_logf(LOG_DEBUG, 0, "vici: list_sas done");
 		}
 #endif
 	}

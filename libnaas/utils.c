@@ -15,7 +15,7 @@ naas_xmalloc(size_t size)
 
 	ptr = malloc(size);
 	if (ptr == NULL) {
-		naas_logf(LOG_ERR, errno, "malloc(%zu) failed", size);
+		naas_errno_logf(LOG_ERR, errno, "malloc(%zu) failed", size);
 		abort();
 	}
 	return ptr;

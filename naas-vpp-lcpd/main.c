@@ -87,7 +87,7 @@ lcp_route_vlogf(int level, int errnum, struct rtnl_route *route, const char *for
 	naas_strbuf_addf(&sb, "/%d]", prefixlen);
 	naas_strbuf_vaddf(&sb, format, ap);
 	if (errnum) {
-		naas_log_add_error(&sb, errnum);
+		naas_log_add_errno(&sb, errnum);
 	}
 	naas_log_flush(level, &sb);
 }
@@ -129,7 +129,7 @@ pid_file_open()
 	rc = open(path, O_CREAT|O_RDWR, 0666);
 	if (rc == -1) {
 		rc = -errno;
-		naas_logf(LOG_ERR, -rc, "open('%s') failed", path);
+		naas_errno_logf(LOG_ERR, -rc, "open('%s') failed", path);
 		return rc;
 	}
 	fd = rc;
@@ -138,17 +138,17 @@ pid_file_open()
 		rc = -errno;
 	}
 	if (rc == -EWOULDBLOCK) {
-		naas_logf(LOG_ERR, 0, "Daemon already running");
+		naas_logf(LOG_ERR, "Daemon already running");
 		return rc;
 	} else if (rc < 0) {
-		naas_logf(LOG_ERR, -rc, "flock('%s') failed", path);
+		naas_errno_logf(LOG_ERR, -rc, "flock('%s') failed", path);
 		return rc;
 	}
 	len = snprintf(buf, sizeof(buf), "%d", (int)getpid());
 	rc = write(fd, buf, len);
 	if (rc == -1) {
 		rc = -errno;
-		naas_logf(LOG_ERR, -rc, "write('%s') failed", path);
+		naas_errno_logf(LOG_ERR, -rc, "write('%s') failed", path);
 		return rc;
 	} else {
 		return 0;
@@ -245,7 +245,7 @@ lcp_tunsrc_set()
 	g_tunsrc_set = 1;
 	rc = lcp_ip_sr_tunsrc_show(&src);
 	if (rc < 0) {
-		naas_logf(LOG_ERR, -rc, "[NETLINK] 'ip sr tunsrc show' failed");
+		naas_errno_logf(LOG_ERR, -rc, "[NETLINK] 'ip sr tunsrc show' failed");
 		return;
 	}
 	naas_api_set_sr_encaps_source_addr(&src);

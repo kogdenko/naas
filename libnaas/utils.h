@@ -5,6 +5,9 @@
 #include <stddef.h>
 #include <arpa/inet.h>
 
+#define NAAS_ERR_ERRNO (0) // errno by default
+#define NAAS_ERR_VNET 1
+
 #define naas_barrier() __asm__ __volatile__("": : :"memory")
 
 #define naas_field_off(type, field) ((intptr_t)&((type *)0)->field)
@@ -44,7 +47,13 @@
 #define NAAS_MIN(a, b) ((a) < (b) ? (a) : (b))
 
 #define NAAS_INET_NTOA(src, dst) inet_ntop(AF_INET, src, dst, INET_ADDRSTRLEN)
-	
+
+typedef uint32_t be32_t;
+
+typedef struct naas_err {
+	uint16_t type;
+	uint16_t num;
+} naas_err_t;
 
 void *naas_xmalloc(size_t size);
 char *naas_strzcpy(char *, const char *, size_t);

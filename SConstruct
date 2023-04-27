@@ -181,6 +181,41 @@ def vpp_sswan(env, deps):
 		Requires(lib, dep)
 	return lib
 
+def vpp_sswan_vanilla(env, deps):
+	global libnaas_ld
+	sswan = get_sswan()
+
+	cflags = [
+		'-include ' + sswan + '/config.h',
+		'-I' + sswan + '/src/libstrongswan',
+		'-I' + sswan + '/src/libcharon',
+	]
+
+	srcs = [
+		'vpp_sswan_vanilla/kernel_vpp_plugin.c',
+		'vpp_sswan_vanilla/kernel_vpp_shared.c',
+		'vpp_sswan_vanilla/kernel_vpp_ipsec.c',
+		'vpp_sswan_vanilla/kernel_vpp_net.c',
+	]
+
+	ldflags = [
+		'-lvppinfra',
+#		'-lvlibmemoryclient',
+		'-lvlibapi',
+		'-lsvm',
+		'-lvppapiclient',
+		libnaas_ld,
+	]
+
+	env = env.Clone()
+	env.Append(CFLAGS = flags_to_string(cflags))
+	env.Append(LINKFLAGS = flags_to_string(ldflags))
+	lib = env.SharedLibrary('bin/libstrongswan-kernel-vpp.so.vanilla', srcs)
+	for dep in deps:
+		Requires(lib, dep)
+	return lib
+
+
 
 def naas_route_based_updown(env, deps):
 	global libnaas_ld
@@ -315,7 +350,10 @@ AddOption('--sswan', type='string', action='store', help='Strongswan sources')
 
 libnaas = build_libnaas(env)
 libstrongswan_kernel_vpp = vpp_sswan(env, [ libnaas ])
-naas_vpp_lcpd(env, [ libnaas, libstrongswan_kernel_vpp ])
+
+vpp_sswan_vanilla(env, [ libnaas ])
+
+naas_vpp_lcpd(env, [ libnaas ])
 naas_route_based_updown(env, [ libnaas ])
 
 if 'deb' in COMMAND_LINE_TARGETS:

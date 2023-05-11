@@ -94,15 +94,16 @@ naas_err_t naas_api_sr_steering_add_del(int is_add, int phy_sw_if_index, int fam
 
 naas_err_t naas_api_ipsec_spd_add_del(int is_add, uint32_t spd_id);
 
+naas_err_t naas_api_ipsec_itf_create(int instance, uint32_t *sw_if_index);
+
+naas_err_t naas_api_ipsec_spd_add_del(int is_add, uint32_t spd_id);
+
 naas_err_t naas_api_ipsec_tunnel_protect_update(uint32_t sw_if_index, uint32_t sa_in, uint32_t sa_out);
 
 typedef void (*naas_api_ipsec_sa_dump_f)(void *user, uint32_t sad_id, uint32_t spi);
 naas_err_t naas_api_ipsec_sa_dump(naas_api_ipsec_sa_dump_f handler, void *user);
 
-struct naas_ipip_add_tunnel_ret {
-	uint32_t sw_if_index;
-};
 naas_err_t naas_api_ipip_add_tunnel(int instance, struct in_addr src, struct in_addr dst,
-		struct naas_ipip_add_tunnel_ret *ret);
+		uint32_t *sw_if_index);
 
 #endif // NAAS_VPP_API_H

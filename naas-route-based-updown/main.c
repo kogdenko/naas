@@ -35,6 +35,7 @@ struct request {
 
 static int g_log_inited;
 static uint32_t g_loop_sw_if_index;
+static int g_use_ipip;
 
 #define VICI_RESOLVE
 
@@ -223,22 +224,24 @@ get_sw_if_index(const char *loop)
 static void
 finalize_request(struct request *req)
 {
-	int ipip_sw_if_index;
+	uint32_t sw_if_index;
 	naas_err_t err;
-	struct naas_ipip_add_tunnel_ret naas_ipip_add_tunnel_ret;
 
-	err = naas_api_ipip_add_tunnel(req->reqid, req->me, req->peer, &naas_ipip_add_tunnel_ret);
-	ipip_sw_if_index = naas_ipip_add_tunnel_ret.sw_if_index;
-	if (ipip_sw_if_index == ~0) {
-		naas_err_logf(LOG_ERR, err, "ipip_add_tunnel() failed");
+	if (g_use_ipip) {
+		err = naas_api_ipip_add_tunnel(req->reqid, req->me, req->peer, &sw_if_index);
+	} else {
+		err = naas_api_ipsec_itf_create(req->reqid, &sw_if_index);
+	}
+	if (sw_if_index == ~0) {
+		naas_err_logf(LOG_ERR, err, "Failed to create interface (instance=%u)",
+			req->reqid);
 		return;
 	}
 
-	naas_api_sw_interface_set_unnumbered(1, g_loop_sw_if_index, ipip_sw_if_index);
-	naas_api_sw_interface_set_flags(ipip_sw_if_index, IF_STATUS_API_FLAG_ADMIN_UP);
-	naas_api_ip_route_add_del(1, req->peer_client, req->peer_client_mask, ipip_sw_if_index);
-	naas_api_ipsec_tunnel_protect_update(ipip_sw_if_index,
-			req->sa[REQ_IN], req->sa[REQ_OUT]);
+	naas_api_sw_interface_set_unnumbered(1, g_loop_sw_if_index, sw_if_index);
+	naas_api_sw_interface_set_flags(sw_if_index, IF_STATUS_API_FLAG_ADMIN_UP);
+	naas_api_ip_route_add_del(1, req->peer_client, req->peer_client_mask, sw_if_index);
+	naas_api_ipsec_tunnel_protect_update(sw_if_index, req->sa[REQ_IN], req->sa[REQ_OUT]);
 }
 
 static int
@@ -544,6 +547,7 @@ main(int argc, char **argv)
 		{"peer", required_argument, 0, 0 },
 		{"peer-client", required_argument, 0, 0 },
 		{"loop", required_argument, 0, 0 },
+		{"ipip", no_argument, 0, 0 },
 	};
 
 	dflag = 0;
@@ -581,6 +585,8 @@ main(int argc, char **argv)
 				}
 			} else if (!strcmp(long_option_name, "loop")) {
 				loop = optarg;
+			} else if (!strcmp(long_option_name, "ipip")) {
+				g_use_ipip = 1;
 			}
 			break;
 		case 'd':

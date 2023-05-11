@@ -716,6 +716,44 @@ naas_api_ipsec_spd_add_del(int is_add, uint32_t spd_id)
 	return err;
 }
 
+naas_err_t
+naas_api_ipsec_itf_create(int instance, uint32_t *p_sw_if_index)
+{
+	int msg_id;
+	uint32_t sw_if_index;
+	naas_err_t err;
+	vl_api_ipsec_itf_create_t mp;
+	vl_api_ipsec_itf_create_reply_t *rp;
+	api_main_t *am;
+
+	am = vlibapi_get_main();
+
+	msg_id = vac_get_msg_index(VL_API_IPSEC_ITF_CREATE_CRC);
+
+	clib_memset(&mp, 0, sizeof(mp));
+	mp._vl_msg_id = ntohs(msg_id);
+	mp.client_index = am->my_client_index;
+	mp.itf.mode =  TUNNEL_API_MODE_P2P;
+	mp.itf.user_instance = htonl(instance);
+
+	sw_if_index = ~0;
+	err.num = 0;
+
+	err = NAAS_API_INVOKE(mp, rp);
+	if (err.type == NAAS_ERR_VNET) {
+		sw_if_index = ntohl(rp->sw_if_index);
+	}
+	naas_api_msg_free(rp);
+
+	if (p_sw_if_index != NULL) {
+		*p_sw_if_index = sw_if_index;
+	}
+
+	naas_err_logf(LOG_INFO, err, "[VPP][API][ipsec_itf_create] instance=%u", instance);
+
+	return err;
+}
+
 typedef struct naas_api_vl_api_ipsec_tunnel_protect_update {
 	vl_api_ipsec_tunnel_protect_update_t base;
 	uint32_t sa_in;
@@ -795,10 +833,11 @@ naas_api_ipsec_sa_dump(naas_api_ipsec_sa_dump_f handler, void *user)
 
 naas_err_t
 naas_api_ipip_add_tunnel(int instance, struct in_addr src, struct in_addr dst,
-		struct naas_ipip_add_tunnel_ret *ret)
+		uint32_t *p_sw_if_index)
 {
 	int msg_id;
 	naas_err_t err;
+	uint32_t sw_if_index;
 	char srcbuf[INET_ADDRSTRLEN];
 	char dstbuf[INET_ADDRSTRLEN];
 	vl_api_ipip_add_tunnel_t mp;
@@ -815,19 +854,23 @@ naas_api_ipip_add_tunnel(int instance, struct in_addr src, struct in_addr dst,
 	clib_memcpy(mp.tunnel.dst.un.ip4, &dst.s_addr, 4);
 	mp.tunnel.mode = TUNNEL_API_MODE_P2P;
 
-	ret->sw_if_index = ~0;
+	sw_if_index = ~0;
 	err.num = 0;
 
 	err = NAAS_API_INVOKE(mp, rp);
 	if (err.type == NAAS_ERR_VNET) {
-		ret->sw_if_index = ntohl(rp->sw_if_index);
+		sw_if_index = ntohl(rp->sw_if_index);
 	}
 	naas_api_msg_free(rp);
+
+	if (p_sw_if_index != NULL) {
+		*p_sw_if_index = sw_if_index;
+	}
 
 	naas_err_logf(LOG_INFO, err,
 "[VPP][API][ipip_add_tunnel] instance=%u, src=%s, dst=%s, sw_if_index=%u",
 			instance, NAAS_INET_NTOA(&src, srcbuf), NAAS_INET_NTOA(&dst, dstbuf),
-			ret->sw_if_index);
+			sw_if_index);
 
 	return err;
 }

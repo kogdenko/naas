@@ -283,7 +283,10 @@ def build_deb(env):
 
 	DEBCONTROLFILE = os.path.join(DEBNAME, "DEBIAN/control")
 
-	shutil.rmtree(DEBNAME)
+	try:
+		shutil.rmtree(DEBNAME)
+	except:
+		pass
 
 	for f in DEBFILES:
 		dest = os.path.join(DEBNAME, f[0])

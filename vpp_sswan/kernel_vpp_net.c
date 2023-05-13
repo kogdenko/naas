@@ -155,16 +155,12 @@ static status_t
 manage_route (private_kernel_vpp_net_t *this, bool add, chunk_t dst,
 	      uint8_t prefixlen, host_t *gtw, char *name)
 {
-  //net_update_thread_fn (this);
-
-#if 0
-  char *out;
-  int out_len;
   enumerator_t *enumerator;
   iface_t *entry;
   vl_api_ip_route_add_del_t *mp;
   vl_api_ip_route_add_del_reply_t *rmp;
   vl_api_fib_path_t *apath;
+  naas_err_t err;
   bool exists = FALSE;
 
   this->mutex->lock (this->mutex);
@@ -224,25 +220,21 @@ manage_route (private_kernel_vpp_net_t *this, bool add, chunk_t dst,
       return FAILED;
     }
 
-  VAC_LOG("ip_route_add_del");
-  if (vac->send (vac, (char *) mp, sizeof (*mp) + sizeof (*apath), &out,
-		 &out_len))
+  err = NAAS_API_INVOKE3(mp, sizeof (*mp) + sizeof (*apath), rmp);
+  naas_api_msg_free (rmp);
+  vl_msg_api_free (mp);
+
+  if (err.num && err.type == NAAS_ERR_ERRNO)
     {
       DBG1 (DBG_KNL, "vac %sing route failed", add ? "add" : "remov");
-      vl_msg_api_free (mp);
       return FAILED;
     }
-  rmp = (void *) out;
-  vl_msg_api_free (mp);
-  if (rmp->retval)
+  if (err.num && err.type == NAAS_ERR_VNET)
     {
-      DBG1 (DBG_KNL, "%s route failed %d", add ? "add" : "delete",
-	    ntohl (rmp->retval));
-      free (out);
+      DBG1 (DBG_KNL, "%s route failed %d", add ? "add" : "delete", err.num);
       return FAILED;
     }
-  free (out);
-#endif
+
   return SUCCESS;
 }
 
@@ -300,7 +292,7 @@ static int
 get_route_route_dump_handler(void *user0, void *user1, void *data, int len)
 {
   vl_api_ip_route_details_t *rmp;
-  if (len != sizeof(*rmp))
+  if (len < sizeof(*rmp))
     return -EINVAL;
   rmp = data;
 
@@ -352,10 +344,6 @@ get_route (private_kernel_vpp_net_t *this, host_t *dest, int prefix,
   enumerator_t *enumerator;
   iface_t *entry;
   int family;
-
-  //net_update_thread_fn (this);
-
-  return addr;
 
   path.sw_if_index = ~0;
   path.preference = ~0;

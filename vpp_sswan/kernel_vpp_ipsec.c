@@ -233,11 +233,7 @@ static uint32_t get_sw_if_index ();
 static int
 set_arp (char *ipStr, char *if_name, bool add)
 {
-  return SUCCESS;
-#if 0
-  char *out = NULL;
-  int out_len = 0;
-  vl_api_ip_neighbor_add_del_t *mp = NULL;
+  vl_api_ip_neighbor_add_del_t mp;
   vl_api_ip_neighbor_add_del_reply_t *rmp = NULL;
   int rc = SUCCESS;
   uint32_t sw_if_index = ~0;
@@ -252,6 +248,7 @@ set_arp (char *ipStr, char *if_name, bool add)
     0,
   };
   struct in_addr addr = { 0 };
+  naas_err_t err;
 
   if (if_name == NULL || ipStr == NULL)
     {
@@ -261,8 +258,7 @@ set_arp (char *ipStr, char *if_name, bool add)
     }
   DBG2 (DBG_KNL, "from kernel read mac\n");
 
-  mp = vl_msg_api_alloc (sizeof (*mp));
-  memset (mp, 0, sizeof (*mp));
+  memset (&mp, 0, sizeof (mp));
   sw_if_index = get_sw_if_index (if_name);
   if (sw_if_index == ~0)
     {
@@ -282,33 +278,36 @@ set_arp (char *ipStr, char *if_name, bool add)
 		  &mac[2], &mac[3], &mac[4], &mac[5]);
 	  u16 msg_id =
 	    vl_msg_api_get_msg_index ((u8 *) "ip_neighbor_add_del_0607c257");
-	  mp->_vl_msg_id = htons (msg_id);
-	  mp->is_add = add;
-	  memcpy (mp->neighbor.ip_address.un.ip4, (u8 *) &addr, sizeof (addr));
-	  mp->neighbor.ip_address.af = 0;
-	  memcpy (mp->neighbor.mac_address, mac, 6);
-	  mp->neighbor.sw_if_index = htonl (sw_if_index);
-	  mp->neighbor.flags = 1;
+	  mp._vl_msg_id = htons (msg_id);
+	  mp.is_add = add;
+	  memcpy (mp.neighbor.ip_address.un.ip4, (u8 *) &addr, sizeof (addr));
+	  mp.neighbor.ip_address.af = 0;
+	  memcpy (mp.neighbor.mac_address, mac, 6);
+	  mp.neighbor.sw_if_index = htonl (sw_if_index);
+	  mp.neighbor.flags = 1;
 
-	  VAC_LOG("ip_neighbor_add_del");
-	  if (vac->send (vac, (char *) mp, sizeof (*mp), &out, &out_len))
-	    {
+
+          err = NAAS_API_INVOKE (mp, rmp);
+          naas_api_msg_free (rmp);
+
+          if (err.num && err.type == NAAS_ERR_ERRNO)
+            {
 	      DBG1 (DBG_KNL, "vac %s neighbor entry",
 		    add ? "adding" : "removing");
 	      fclose (fp);
 	      goto error;
-	    }
-	  rmp = (void *) out;
-	  if (rmp->retval)
-	    {
+
+             }
+          if (err.num && err.type == NAAS_ERR_VNET)
+            {
 	      DBG1 (DBG_KNL, "%s neighbor add rv:%d", add ? "add" : "remove",
-		    ntohl (rmp->retval));
+		    err.num);
 	      fclose (fp);
 	      goto error;
-	    }
+
+             }
+
 	  fclose (fp);
-	  free (out);
-	  vl_msg_api_free (mp);
 	  free (buffer);
 
 	  return rc;
@@ -322,15 +321,12 @@ set_arp (char *ipStr, char *if_name, bool add)
     }
 
 error:
-  free (out);
-  vl_msg_api_free (mp);
   if (buffer != NULL)
     {
       free (buffer);
       buffer = NULL;
     }
   return rc;
-#endif
 }
 
 static int
@@ -443,6 +439,7 @@ manage_route (private_kernel_vpp_ipsec_t *this, bool add,
   char *netmask = "255.255.255.0";
   char *tap_gateway = "1.1.1.1";
   int arp_rc = 0;
+
   if (dst->is_anyaddr (dst))
     {
       return;
@@ -716,7 +713,7 @@ get_sw_if_index (char *interface)
 static status_t
 spd_add_del (bool add, uint32_t spd_id)
 {
-  int rc;
+  naas_err_t err;
   vl_api_ipsec_spd_add_del_t mp;
   vl_api_ipsec_spd_add_del_reply_t *rmp;
   status_t rv = FAILED;
@@ -728,17 +725,16 @@ spd_add_del (bool add, uint32_t spd_id)
   mp.is_add = add;
   mp.spd_id = htonl (spd_id);
 
-  rc = NAAS_API_INVOKE (mp, rmp);
-  if (rc)
+  err = NAAS_API_INVOKE (mp, rmp);
+  naas_api_msg_free (rmp);
+  if (err.num && err.type == NAAS_ERR_ERRNO)
     {
       DBG1 (DBG_KNL, "vac %s SPD failed", add ? "adding" : "removing");
       goto error;
     }
-  rc = ntohl (rmp->retval);
-  naas_api_msg_free (rmp);
-  if (rc)
+  if (err.num && err.type == NAAS_ERR_VNET)
     {
-      DBG1 (DBG_KNL, "%s SPD failed rv:%d", add ? "add" : "remove", rc);
+      DBG1 (DBG_KNL, "%s SPD failed rv:%d", add ? "add" : "remove", err.num);
       goto error;
     }
   rv = SUCCESS;
@@ -755,7 +751,7 @@ int naas_api_ipsec_interface_add_del_spd(int is_add, uint32_t spd_id, uint32_t s
 static status_t
 interface_add_del_spd (bool add, uint32_t spd_id, uint32_t sw_if_index)
 {
-  int rc;
+  naas_err_t err;
   vl_api_ipsec_interface_add_del_spd_t mp;
   vl_api_ipsec_interface_add_del_spd_reply_t *rmp;
   status_t rv = FAILED;
@@ -767,18 +763,17 @@ interface_add_del_spd (bool add, uint32_t spd_id, uint32_t sw_if_index)
   mp.is_add = add;
   mp.spd_id = htonl (spd_id);
   mp.sw_if_index = htonl (sw_if_index);
-  rc = NAAS_API_INVOKE (mp, rmp);
-  if (rc)
+  err = NAAS_API_INVOKE (mp, rmp);
+  naas_api_msg_free (rmp);
+  if (err.num && err.type == NAAS_ERR_ERRNO)
     {
       DBG1 (DBG_KNL, "vac %s interface SPD failed",
 	    add ? "adding" : "removing");
       goto error;
     }
-  rc = ntohl (rmp->retval);
-  naas_api_msg_free (rmp);
-  if (rc)
+  if (err.num && err.type == NAAS_ERR_VNET)
     {
-      DBG1 (DBG_KNL, "%s interface SPD failed rv:%d", add ? "add" : "remove", rc);
+      DBG1 (DBG_KNL, "%s interface SPD failed rv:%d", add ? "add" : "remove", err.num);
       goto error;
     }
   rv = SUCCESS;
@@ -790,7 +785,7 @@ error:
 static int
 bypass_all (bool add, uint32_t spd_id, uint32_t sa_id)
 {
-  int rc;
+  naas_err_t err;
   vl_api_ipsec_spd_entry_add_del_t mp;
   vl_api_ipsec_spd_entry_add_del_reply_t *rmp;
   status_t rv = FAILED;
@@ -815,18 +810,16 @@ bypass_all (bool add, uint32_t spd_id, uint32_t sa_id)
   mp.entry.remote_port_stop = mp.entry.local_port_stop = ntohs (0xFFFF);
   mp.entry.protocol = IP_API_PROTO_ESP;
 
-  rc = NAAS_API_INVOKE (mp, rmp);
-  if (rc)
+  err = NAAS_API_INVOKE (mp, rmp);
+  naas_api_msg_free (rmp);
+  if (err.num && err.type == NAAS_ERR_ERRNO)
     {
       DBG1 (DBG_KNL, "vac %s SPD entry failed", add ? "adding" : "removing");
       goto error;
     }
-
-  rc = ntohl (rmp->retval);
-  naas_api_msg_free (rmp);
-  if (rc)
+  if (err.num && err.type == NAAS_ERR_VNET)
     {
-      DBG1 (DBG_KNL, "%s SPD entry failed rv:%d", add ? "add" : "remove", rc);
+      DBG1 (DBG_KNL, "%s SPD entry failed rv:%d", add ? "add" : "remove", err.num);
       goto error;
     }
   /* address "out" needs to be freed after vec->send */
@@ -840,19 +833,16 @@ bypass_all (bool add, uint32_t spd_id, uint32_t sa_id)
 //  VAC_LOG("ipsec_spd_entry_add_del");
 //  if (vac->send (vac, (char *) mp, sizeof (*mp), &out, &out_len))
 
-  rc = NAAS_API_INVOKE (mp, rmp);
-  if (rc)
+  err = NAAS_API_INVOKE (mp, rmp);
+  naas_api_msg_free (rmp); 
+  if (err.num && err.type == NAAS_ERR_ERRNO)
     {
       DBG1 (DBG_KNL, "vac %s SPD entry failed", add ? "adding" : "removing");
       goto error;
     }
-
-//  rmp = (void *) out;
-  rc = ntohl (rmp->retval);  
-  naas_api_msg_free (rmp); 
-  if (rc)
+  if (err.num && err.type == NAAS_ERR_VNET)
     {
-      DBG1 (DBG_KNL, "%s SPD entry failed rv:%d", add ? "add" : "remove", rc);
+      DBG1 (DBG_KNL, "%s SPD entry failed rv:%d", add ? "add" : "remove", err.num);
       goto error;
     }
   /* address "out" needs to be freed after vec->send */
@@ -868,18 +858,16 @@ bypass_all (bool add, uint32_t spd_id, uint32_t sa_id)
   //VAC_LOG("ipsec_spd_entry_add_del");
   //if (vac->send (vac, (char *) mp, sizeof (*mp), &out, &out_len))
 
-  rc = NAAS_API_INVOKE (mp, rmp);
-  if (rc)
+  err = NAAS_API_INVOKE (mp, rmp);
+  naas_api_msg_free (rmp); 
+  if (err.num && err.type == NAAS_ERR_ERRNO)
     {
       DBG1 (DBG_KNL, "vac %s SPD entry failed", add ? "adding" : "removing");
       goto error;
     }
-
-  rc = ntohl (rmp->retval);  
-  naas_api_msg_free (rmp); 
-  if (rc)
+  if (err.num && err.type == NAAS_ERR_VNET)
     {
-      DBG1 (DBG_KNL, "%s SPD entry failed rv:%d", add ? "add" : "remove", rc);
+      DBG1 (DBG_KNL, "%s SPD entry failed rv:%d", add ? "add" : "remove", err.num);
       goto error;
     }
   /* address "out" needs to be freed after vec->send */
@@ -893,21 +881,16 @@ bypass_all (bool add, uint32_t spd_id, uint32_t sa_id)
 //  VAC_LOG("ipsec_spd_entry_add_del");
 //  if (vac->send (vac, (char *) mp, sizeof (*mp), &out, &out_len))
 
-  rc = NAAS_API_INVOKE (mp, rmp);
-  if (rc)
+  err = NAAS_API_INVOKE (mp, rmp);
+  naas_api_msg_free (rmp); 
+  if (err.num && err.type == NAAS_ERR_ERRNO)
     {
       DBG1 (DBG_KNL, "vac %s SPD entry failed", add ? "adding" : "removing");
       goto error;
     }
-//  rmp = (void *) out;
-
-//  if (rmp->retval)
-  rc = ntohl (rmp->retval);  
-  naas_api_msg_free (rmp); 
-  if (rc)
+  if (err.num && err.type == NAAS_ERR_VNET)
     {
-      DBG1 (DBG_KNL, "%s SPD entry failed rv:%d", add ? "add" : "remove",
-	    ntohl (rmp->retval));
+      DBG1 (DBG_KNL, "%s SPD entry failed rv:%d", add ? "add" : "remove", err.num);
       goto error;
     }
 
@@ -924,7 +907,7 @@ error:
 static int
 bypass_port (bool add, uint32_t spd_id, uint32_t sa_id, uint16_t port)
 {
-  int rc;
+  naas_err_t err;
   vl_api_ipsec_spd_entry_add_del_t mp;
   vl_api_ipsec_spd_entry_add_del_reply_t *rmp;
   status_t rv = FAILED;
@@ -949,21 +932,16 @@ bypass_port (bool add, uint32_t spd_id, uint32_t sa_id, uint16_t port)
 //  VAC_LOG("ipsec_spd_entry_add_del");
 //  if (vac->send (vac, (char *) mp, sizeof (*mp), &out, &out_len))
 
-  rc = NAAS_API_INVOKE (mp, rmp);
-  if (rc)
+  err = NAAS_API_INVOKE (mp, rmp);
+  naas_api_msg_free (rmp); 
+  if (err.num && err.type == NAAS_ERR_ERRNO)
     {
       DBG1 (DBG_KNL, "vac %s SPD entry failed", add ? "adding" : "removing");
       goto error;
     }
-//  rmp = (void *) out;
-  //if (rmp->retval)
-
-  rc = ntohl (rmp->retval);  
-  naas_api_msg_free (rmp); 
-  if (rc)
+  if (err.num && err.type == NAAS_ERR_VNET)
     {
-      DBG1 (DBG_KNL, "%s SPD entry failed rv:%d", add ? "add" : "remove",
-	    ntohl (rmp->retval));
+      DBG1 (DBG_KNL, "%s SPD entry failed rv:%d", add ? "add" : "remove", err.num);
       goto error;
     }
   /* address "out" needs to be freed after vec->send */
@@ -975,20 +953,16 @@ bypass_port (bool add, uint32_t spd_id, uint32_t sa_id, uint16_t port)
   mp.entry.is_outbound = 1;
 //  VAC_LOG("ipsec_spd_entry_add_del");
 //  if (vac->send (vac, (char *) mp, sizeof (*mp), &out, &out_len))
-  rc = NAAS_API_INVOKE (mp, rmp);
-  if (rc)
+  err = NAAS_API_INVOKE (mp, rmp);
+  naas_api_msg_free (rmp);
+  if (err.num && err.type == NAAS_ERR_ERRNO)
     {
       DBG1 (DBG_KNL, "vac %s SPD entry failed", add ? "adding" : "removing");
       goto error;
     }
-//  rmp = (void *) out;
-//  if (rmp->retval)
-  rc = ntohl (rmp->retval);  
-  naas_api_msg_free (rmp); 
-  if (rc)
+  if (err.num && err.type == NAAS_ERR_VNET)
     {
-      DBG1 (DBG_KNL, "%s SPD entry failed rv:%d", add ? "add" : "remove",
-	    ntohl (rmp->retval));
+      DBG1 (DBG_KNL, "%s SPD entry failed rv:%d", add ? "add" : "remove", err.num);
       goto error;
     }
   rv = SUCCESS;
@@ -1071,7 +1045,7 @@ manage_policy (private_kernel_vpp_ipsec_t *this, bool add,
 	       kernel_ipsec_policy_id_t *id,
 	       kernel_ipsec_manage_policy_t *data)
 {
-  int rc;
+  naas_err_t err;
   spd_t *spd = NULL;
   char *interface = NULL;
   uint32_t sw_if_index, spd_id = ~0, sad_id = ~0;
@@ -1308,19 +1282,18 @@ manage_policy (private_kernel_vpp_ipsec_t *this, bool add,
 //  free (out);
 
 //  VAC_LOG("ipsec_spd_entry_add_del");
-  rc = NAAS_API_INVOKE (mp, rmp);
+  err = NAAS_API_INVOKE (mp, rmp);
+  naas_api_msg_free (rmp);
+
 //  if (vac->send (vac, (char *) &mp, sizeof (mp), &out, &out_len))
-  if (rc)
+  if (err.num && err.type == NAAS_ERR_ERRNO)
     {
       DBG1 (DBG_KNL, "vac %s SPD entry failed", add ? "adding" : "removing");
       goto error;
     }
-//  rmp = (void *) out;
-  rc = htonl(rmp->retval);
-  naas_api_msg_free (rmp);
-  if (rc)
+  if (err.num && err.type == NAAS_ERR_VNET)
     {
-      DBG1 (DBG_KNL, "%s SPD entry failed rv:%d", add ? "add" : "remove", rc);
+      DBG1 (DBG_KNL, "%s SPD entry failed rv:%d", add ? "add" : "remove", err.num);
       goto error;
     }
 
@@ -1500,7 +1473,7 @@ schedule_expiration (private_kernel_vpp_ipsec_t *this,
 METHOD (kernel_ipsec_t, add_sa, status_t, private_kernel_vpp_ipsec_t *this,
 	kernel_ipsec_sa_id_t *id, kernel_ipsec_add_sa_t *data)
 {
-  int rc;
+  naas_err_t err;
   vl_api_ipsec_sad_entry_add_del_t mp;
   vl_api_ipsec_sad_entry_add_del_reply_t *rmp;
   uint32_t sad_id = ref_get (&this->next_sad_id);
@@ -1700,17 +1673,16 @@ METHOD (kernel_ipsec_t, add_sa, status_t, private_kernel_vpp_ipsec_t *this,
   memcpy (is_ipv6 ? mp.entry.tunnel_dst.un.ip6 : mp.entry.tunnel_dst.un.ip4,
 	  dst.ptr, dst.len);
 
-  rc = NAAS_API_INVOKE (mp, rmp);
-  if (rc)
+  err = NAAS_API_INVOKE (mp, rmp);
+  naas_api_msg_free (rmp);
+  if (err.num && err.type == NAAS_ERR_ERRNO)
     {
       DBG1 (DBG_KNL, "vac adding SA failed");
       goto error;
     }
-  rc = ntohl (rmp->retval);
-  naas_api_msg_free (rmp);
-  if (rc)
+  if (err.num && err.type == NAAS_ERR_VNET)
     {
-      DBG1 (DBG_KNL, "add SA failed rv:%d", rc);
+      DBG1 (DBG_KNL, "add SA failed rv:%d", err.num);
       goto error;
     }
 
@@ -1855,8 +1827,7 @@ METHOD (kernel_ipsec_t, query_sa, status_t, private_kernel_vpp_ipsec_t *this,
 METHOD (kernel_ipsec_t, del_sa, status_t, private_kernel_vpp_ipsec_t *this,
 	kernel_ipsec_sa_id_t *id, kernel_ipsec_del_sa_t *data)
 {
-  //char *out = NULL;
-  int rc;
+  naas_err_t err;
   vl_api_ipsec_sad_entry_add_del_t mp;
   vl_api_ipsec_sad_entry_add_del_reply_t *rmp;
   status_t rv = FAILED;
@@ -1879,18 +1850,16 @@ METHOD (kernel_ipsec_t, del_sa, status_t, private_kernel_vpp_ipsec_t *this,
   mp._vl_msg_id = htons (msg_id);
   mp.entry.sad_id = htonl (sa->sa_id);
 
-  rc = NAAS_API_INVOKE (mp, rmp);
-  if (rc)
+  err = NAAS_API_INVOKE (mp, rmp);
+  naas_api_msg_free (rmp);
+  if (err.num && err.type == NAAS_ERR_ERRNO)
     {
       DBG1 (DBG_KNL, "vac removing SA failed");
       goto error;
     }
-
-  rc = ntohl (rmp->retval);
-  naas_api_msg_free (rmp);
-  if (rc)
+  if (err.num && err.type == NAAS_ERR_VNET)
     {
-      DBG1 (DBG_KNL, "del SA failed rv:%d", rc);
+      DBG1 (DBG_KNL, "del SA failed rv:%d", err.num);
       goto error;
     }
 
@@ -1979,6 +1948,7 @@ METHOD (kernel_ipsec_t, add_policy, status_t, private_kernel_vpp_ipsec_t *this,
 	kernel_ipsec_policy_id_t *id, kernel_ipsec_manage_policy_t *data)
 {
   VAC_METHOD;
+  net_update_thread_fn ();
   return manage_policy (this, TRUE, id, data);
 }
 
@@ -1994,6 +1964,7 @@ METHOD (kernel_ipsec_t, del_policy, status_t, private_kernel_vpp_ipsec_t *this,
 	kernel_ipsec_policy_id_t *id, kernel_ipsec_manage_policy_t *data)
 {
   VAC_METHOD;
+  net_update_thread_fn ();
   return manage_policy (this, FALSE, id, data);
 }
 

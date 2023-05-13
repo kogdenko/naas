@@ -248,7 +248,10 @@ def build_deb(env):
 
 	DEBCONTROLFILE = os.path.join(DEBNAME, "DEBIAN/control")
 
-	shutil.rmtree(DEBNAME)
+	try:
+		shutil.rmtree(DEBNAME)
+	except:
+		pass
 
 	for f in DEBFILES:
 		dest = os.path.join(DEBNAME, f[0])
@@ -315,7 +318,8 @@ AddOption('--sswan', type='string', action='store', help='Strongswan sources')
 
 libnaas = build_libnaas(env)
 libstrongswan_kernel_vpp = vpp_sswan(env, [ libnaas ])
-naas_vpp_lcpd(env, [ libnaas, libstrongswan_kernel_vpp ])
+
+naas_vpp_lcpd(env, [ libnaas ])
 naas_route_based_updown(env, [ libnaas ])
 
 if 'deb' in COMMAND_LINE_TARGETS:

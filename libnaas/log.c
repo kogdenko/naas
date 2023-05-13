@@ -3,13 +3,15 @@
 #include <errno.h>
 #include <syslog.h>
 
+#include <vnet/error.h>
+
 #include "log.h"
 #include "strbuf.h"
 
 static int g_naas_log_level = LOG_INFO;
 
 static void
-naas_vlogf(int level, int errnum, const char *format, va_list ap)
+naas_err_vlogf(int level, naas_err_t err, const char *format, va_list ap)
 {
 	char log_buf[NAAS_LOGBUFSZ];
 	struct naas_strbuf sb;
@@ -19,7 +21,7 @@ naas_vlogf(int level, int errnum, const char *format, va_list ap)
 	}
 	naas_strbuf_init(&sb, log_buf, sizeof(log_buf));
 	naas_strbuf_vaddf(&sb, format, ap);
-	naas_log_add_error(&sb, errnum);
+	naas_log_add_error(&sb, err);
 	naas_log_flush(level, &sb);
 }
 
@@ -53,13 +55,41 @@ naas_log_level_from_string(const char *s)
 	}
 }
 
-void
-naas_log_add_error(struct naas_strbuf *sb, int errnum)
+static void
+naas_log_add_vnet_error(struct naas_strbuf *sb, int err_num)
 {
-	if (errnum > 0) {
-		naas_strbuf_addf(sb, " (%d:%s)", errnum, strerror(errnum));
-	} else if (errnum < 0) {
-		naas_strbuf_addf(sb, " (ret %d)", -errnum);
+	switch (-err_num) {
+#define _(a, b, c) \
+	case b: \
+		naas_strbuf_addf(sb, " (VNET_ERR_%s:%s)", #a, c); \
+		break;
+	foreach_vnet_error
+#undef _
+
+	default:
+		naas_strbuf_addf(sb, "(VNET_ERR_%d:?)", -err_num);
+		break;
+	}
+}
+
+void
+naas_log_add_errno(struct naas_strbuf *sb, int err_num)
+{
+	naas_strbuf_addf(sb, " (%d:%s)", err_num, strerror(err_num));
+}
+
+void
+naas_log_add_error(struct naas_strbuf *sb, naas_err_t err)
+{
+	if (err.num) {
+		switch (err.type) {
+		case NAAS_ERR_VNET:
+			naas_log_add_vnet_error(sb, err.num);
+			break;
+		default:
+			naas_log_add_errno(sb, err.num);
+			break;
+		}
 	}
 }
 
@@ -81,11 +111,39 @@ naas_log_init(const char *ident, int options)
 }
 
 void
-naas_logf(int level, int errnum, const char *format, ...)
+naas_logf(int level, const char *format, ...)
+{
+	va_list ap;
+	naas_err_t err;
+
+	err.type = NAAS_ERR_ERRNO;
+	err.num = 0;
+
+	va_start(ap, format);
+	naas_err_vlogf(level, err, format, ap);
+	va_end(ap);
+}
+
+void
+naas_err_logf(int level, naas_err_t err, const char *format, ...)
 {
 	va_list ap;
 
 	va_start(ap, format);
-	naas_vlogf(level, errnum, format, ap);
+	naas_err_vlogf(level, err, format, ap);
+	va_end(ap);
+}
+
+void
+naas_errno_logf(int level, int err_num, const char *format, ...)
+{
+	va_list ap;
+	naas_err_t err;
+
+	err.type = NAAS_ERR_ERRNO;
+	err.num = err_num;
+
+	va_start(ap, format);
+	naas_err_vlogf(level, err, format, ap);
 	va_end(ap);
 }

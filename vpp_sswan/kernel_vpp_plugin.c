@@ -60,8 +60,8 @@ METHOD (plugin_t, get_features, int, private_kernel_vpp_plugin_t *this,
   static plugin_feature_t f[] = {
     PLUGIN_CALLBACK (kernel_ipsec_register, kernel_vpp_ipsec_create),
     PLUGIN_PROVIDE (CUSTOM, "kernel-ipsec"),
-    PLUGIN_CALLBACK (kernel_net_register, kernel_vpp_net_create),
-    PLUGIN_PROVIDE (CUSTOM, "kernel-net"),
+//    PLUGIN_CALLBACK (kernel_net_register, kernel_vpp_net_create),
+//    PLUGIN_PROVIDE (CUSTOM, "kernel-net"),
   };
   *features = f;
   return countof (f);

@@ -163,6 +163,8 @@ manage_route (private_kernel_vpp_net_t *this, bool add, chunk_t dst,
   naas_err_t err;
   bool exists = FALSE;
 
+  return NOT_FOUND;
+
   this->mutex->lock (this->mutex);
   enumerator = this->ifaces->create_enumerator (this->ifaces);
   while (enumerator->enumerate (enumerator, &entry))
@@ -220,6 +222,7 @@ manage_route (private_kernel_vpp_net_t *this, bool add, chunk_t dst,
       return FAILED;
     }
 
+  VAC_LOG("api: ip_route_add_del");
   err = NAAS_API_INVOKE3(mp, sizeof (*mp) + sizeof (*apath), rmp);
   naas_api_msg_free (rmp);
   vl_msg_api_free (mp);
@@ -349,6 +352,8 @@ get_route (private_kernel_vpp_net_t *this, host_t *dest, int prefix,
   path.preference = ~0;
   path.next_hop = chunk_empty;
 
+  return NULL;
+
   vl_api_ip_route_dump_t mp;
 
   clib_memset (&mp, 0, sizeof (mp));
@@ -367,6 +372,7 @@ get_route (private_kernel_vpp_net_t *this, host_t *dest, int prefix,
       udata.prefix = prefix;
       udata.path = &path;
 
+      VAC_LOG("api: ip_route_dump");
       naas_api_dump (&mp, sizeof(mp), VL_API_IP_ROUTE_DETAILS_CRC,
           get_route_route_dump_handler, &udata, NULL);
     }
@@ -418,6 +424,7 @@ METHOD (enumerator_t, addr_enumerate, bool, addr_enumerator_t *this,
 
   VAC_METHOD;
 
+  return FALSE;
   VA_ARGS_VGET (args, host);
 
   while (TRUE)
@@ -461,6 +468,8 @@ METHOD (kernel_net_t, get_interface_name, bool, private_kernel_vpp_net_t *this,
 
   //net_update_thread_fn (this);
 
+  return NULL != NULL;
+
   this->mutex->lock (this->mutex);
   entry = address2entry (this, ip);
   if (entry && name)
@@ -478,6 +487,8 @@ METHOD (kernel_net_t, create_address_enumerator, enumerator_t *,
   addr_enumerator_t *enumerator;
 
   VAC_METHOD;
+
+  return enumerator_create_empty ();
 
   if (!(which & ADDR_TYPE_REGULAR))
     {
@@ -608,6 +619,7 @@ update_addrs (private_kernel_vpp_net_t *this, iface_t *entry)
   mp.is_ipv6 = 0;
 
   addrs = linked_list_create ();
+  VAC_LOG("api: ip_address_dump");
   naas_api_dump(&mp, sizeof(mp), VL_API_IP_ADDRESS_DETAILS_CRC,
           update_addrs_dump_handler, addrs, NULL);
 
@@ -720,6 +732,8 @@ net_update_thread_fn ()
   struct timeval tv;
   private_kernel_vpp_net_t *this;
 
+  return;
+
   this = private_kernel_vpp_net;
   gettimeofday (&tv, NULL);
   ms = tv.tv_sec * 1000 + tv.tv_usec / 1000;
@@ -739,6 +753,7 @@ net_update_thread_fn ()
 
       this->mutex->lock (this->mutex);
 
+      VAC_LOG("api: sw_interface_dump");
       naas_api_dump (&mp, sizeof(mp), VL_API_SW_INTERFACE_DETAILS_CRC,
           net_update_interface_dump_handler, this, NULL);
 

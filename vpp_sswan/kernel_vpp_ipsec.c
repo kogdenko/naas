@@ -286,7 +286,7 @@ set_arp (char *ipStr, char *if_name, bool add)
 	  mp.neighbor.sw_if_index = htonl (sw_if_index);
 	  mp.neighbor.flags = 1;
 
-
+	  VAC_LOG("api: ip_neighbor_add_del");
           err = NAAS_API_INVOKE (mp, rmp);
           naas_api_msg_free (rmp);
 
@@ -699,6 +699,7 @@ get_sw_if_index (char *interface)
   mp->name_filter.length = htonl (name_filter_len);
   memcpy ((char *) mp->name_filter.buf, interface, name_filter_len);
 
+  VAC_LOG("api: sw_interface_dump");
   naas_api_dump (mp, msg_len, VL_API_SW_INTERFACE_DETAILS_CRC,
       get_sw_if_index_handler, &sw_if_index, NULL);
 
@@ -725,6 +726,7 @@ spd_add_del (bool add, uint32_t spd_id)
   mp.is_add = add;
   mp.spd_id = htonl (spd_id);
 
+  VAC_LOG("api: ipsec_spd_add_del");
   err = NAAS_API_INVOKE (mp, rmp);
   naas_api_msg_free (rmp);
   if (err.num && err.type == NAAS_ERR_ERRNO)
@@ -763,6 +765,7 @@ interface_add_del_spd (bool add, uint32_t spd_id, uint32_t sw_if_index)
   mp.is_add = add;
   mp.spd_id = htonl (spd_id);
   mp.sw_if_index = htonl (sw_if_index);
+  VAC_LOG("api: ipsec_interface_add_del_spd");
   err = NAAS_API_INVOKE (mp, rmp);
   naas_api_msg_free (rmp);
   if (err.num && err.type == NAAS_ERR_ERRNO)
@@ -810,6 +813,7 @@ bypass_all (bool add, uint32_t spd_id, uint32_t sa_id)
   mp.entry.remote_port_stop = mp.entry.local_port_stop = ntohs (0xFFFF);
   mp.entry.protocol = IP_API_PROTO_ESP;
 
+  VAC_LOG("api: ipsec_spd_entry_add_del");
   err = NAAS_API_INVOKE (mp, rmp);
   naas_api_msg_free (rmp);
   if (err.num && err.type == NAAS_ERR_ERRNO)
@@ -833,6 +837,7 @@ bypass_all (bool add, uint32_t spd_id, uint32_t sa_id)
 //  VAC_LOG("ipsec_spd_entry_add_del");
 //  if (vac->send (vac, (char *) mp, sizeof (*mp), &out, &out_len))
 
+  VAC_LOG("api: ipsec_spd_entry_add_del");
   err = NAAS_API_INVOKE (mp, rmp);
   naas_api_msg_free (rmp); 
   if (err.num && err.type == NAAS_ERR_ERRNO)
@@ -855,9 +860,9 @@ bypass_all (bool add, uint32_t spd_id, uint32_t sa_id)
   mp.entry.is_outbound = 0;
   mp.entry.protocol = IP_API_PROTO_AH;
 
-  //VAC_LOG("ipsec_spd_entry_add_del");
   //if (vac->send (vac, (char *) mp, sizeof (*mp), &out, &out_len))
 
+  VAC_LOG("api: ipsec_spd_entry_add_del");
   err = NAAS_API_INVOKE (mp, rmp);
   naas_api_msg_free (rmp); 
   if (err.num && err.type == NAAS_ERR_ERRNO)
@@ -881,6 +886,7 @@ bypass_all (bool add, uint32_t spd_id, uint32_t sa_id)
 //  VAC_LOG("ipsec_spd_entry_add_del");
 //  if (vac->send (vac, (char *) mp, sizeof (*mp), &out, &out_len))
 
+  VAC_LOG("api: ipsec_spd_entry_add_del");
   err = NAAS_API_INVOKE (mp, rmp);
   naas_api_msg_free (rmp); 
   if (err.num && err.type == NAAS_ERR_ERRNO)
@@ -951,8 +957,8 @@ bypass_port (bool add, uint32_t spd_id, uint32_t sa_id, uint16_t port)
 //      out = NULL;
 //    }
   mp.entry.is_outbound = 1;
-//  VAC_LOG("ipsec_spd_entry_add_del");
 //  if (vac->send (vac, (char *) mp, sizeof (*mp), &out, &out_len))
+  VAC_LOG("api: ipsec_spd_entry_add_del");
   err = NAAS_API_INVOKE (mp, rmp);
   naas_api_msg_free (rmp);
   if (err.num && err.type == NAAS_ERR_ERRNO)
@@ -1060,12 +1066,19 @@ manage_policy (private_kernel_vpp_ipsec_t *this, bool add,
   memset (&mp, 0, sizeof (mp));
 
   this->mutex->lock (this->mutex);
+  VAC_LOG("manage policy: %d", id->dir);
   if (id->dir == POLICY_FWD)
     {
       DBG1 (DBG_KNL, "policy FWD interface");
       rv = SUCCESS;
       goto error;
     }
+
+  // FIXME: >>>>>>>>
+  rv = SUCCESS;
+  goto error;
+  // <<<<<<<<<<<<<<<
+
   addr = id->dir == POLICY_IN ? data->dst : data->src;
   for (int i = 0; i < N_RETRY_GET_IF; i++)
     {
@@ -1259,6 +1272,7 @@ manage_policy (private_kernel_vpp_ipsec_t *this, bool add,
   if (add)
     {
       int found = 0;
+      VAC_LOG("api: ipsec_spd_dump");
       naas_api_dump(&mp_dump, sizeof(mp_dump), VL_API_IPSEC_SPD_DETAILS_CRC,
           ipsec_spd_dump_handler, &found, &mp);
       if (found)
@@ -1281,7 +1295,7 @@ manage_policy (private_kernel_vpp_ipsec_t *this, bool add,
 
 //  free (out);
 
-//  VAC_LOG("ipsec_spd_entry_add_del");
+  VAC_LOG("api: ipsec_spd_entry_add_del");
   err = NAAS_API_INVOKE (mp, rmp);
   naas_api_msg_free (rmp);
 
@@ -1331,11 +1345,31 @@ next:
     {
       if (data->type == POLICY_IPSEC && data->sa->mode != MODE_TRANSPORT)
 	{
+	  VAC_LOG("manage_policy: +route");
 	  manage_route (this, add, id->dst_ts, data->src, data->dst);
 	}
     }
   rv = SUCCESS;
 error:
+  VAC_LOG("XXXX %d %d %d",
+	id->dir == POLICY_OUT,
+	data->type == POLICY_IPSEC,
+	data->sa->mode != MODE_TRANSPORT);
+
+  if (id->dir == POLICY_OUT &&
+      data->type == POLICY_IPSEC &&
+      data->sa->mode != MODE_TRANSPORT)
+    {
+        host_t *dst_net = NULL;
+        uint8_t prefixlen;
+
+	id->dst_ts->to_subnet (id->dst_ts, &dst_net, &prefixlen);
+
+        DBG2 (DBG_KNL, "installing route: %H", dst_net);
+    }
+
+
+
   if (src != NULL)
     src->destroy (src);
   if (dst != NULL)
@@ -1467,9 +1501,6 @@ schedule_expiration (private_kernel_vpp_ipsec_t *this,
 }
 
 
-//void *
-//net_update_thread_fn (private_kernel_vpp_net_t *this);
-
 METHOD (kernel_ipsec_t, add_sa, status_t, private_kernel_vpp_ipsec_t *this,
 	kernel_ipsec_sa_id_t *id, kernel_ipsec_add_sa_t *data)
 {
@@ -1485,8 +1516,6 @@ METHOD (kernel_ipsec_t, add_sa, status_t, private_kernel_vpp_ipsec_t *this,
   int key_len = data->enc_key.len;
 
   VAC_METHOD;
-
-   net_update_thread_fn ();
 
   if ((data->enc_alg == ENCR_AES_CTR) ||
       (data->enc_alg == ENCR_AES_GCM_ICV8) ||
@@ -1673,6 +1702,7 @@ METHOD (kernel_ipsec_t, add_sa, status_t, private_kernel_vpp_ipsec_t *this,
   memcpy (is_ipv6 ? mp.entry.tunnel_dst.un.ip6 : mp.entry.tunnel_dst.un.ip4,
 	  dst.ptr, dst.len);
 
+  VAC_LOG("api: ipsec_sad_entry_add_del");
   err = NAAS_API_INVOKE (mp, rmp);
   naas_api_msg_free (rmp);
   if (err.num && err.type == NAAS_ERR_ERRNO)
@@ -1850,6 +1880,7 @@ METHOD (kernel_ipsec_t, del_sa, status_t, private_kernel_vpp_ipsec_t *this,
   mp._vl_msg_id = htons (msg_id);
   mp.entry.sad_id = htonl (sa->sa_id);
 
+  VAC_LOG("api: ipsec_sad_entry_add_del");
   err = NAAS_API_INVOKE (mp, rmp);
   naas_api_msg_free (rmp);
   if (err.num && err.type == NAAS_ERR_ERRNO)
@@ -1948,7 +1979,6 @@ METHOD (kernel_ipsec_t, add_policy, status_t, private_kernel_vpp_ipsec_t *this,
 	kernel_ipsec_policy_id_t *id, kernel_ipsec_manage_policy_t *data)
 {
   VAC_METHOD;
-  net_update_thread_fn ();
   return manage_policy (this, TRUE, id, data);
 }
 
@@ -1964,7 +1994,6 @@ METHOD (kernel_ipsec_t, del_policy, status_t, private_kernel_vpp_ipsec_t *this,
 	kernel_ipsec_policy_id_t *id, kernel_ipsec_manage_policy_t *data)
 {
   VAC_METHOD;
-  net_update_thread_fn ();
   return manage_policy (this, FALSE, id, data);
 }
 

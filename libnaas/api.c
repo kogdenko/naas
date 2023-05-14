@@ -296,6 +296,35 @@ naas_api_sw_interface_dump(naas_api_sw_interface_dump_f handler, void *user,
 }
 
 naas_err_t
+naas_api_create_loopback(uint32_t *p_sw_if_index)
+{
+	int msg_id;
+	uint32_t sw_if_index;
+	naas_err_t err;
+	vl_api_create_loopback_t mp;
+	vl_api_create_loopback_reply_t *rp;
+	
+	msg_id = vac_get_msg_index(VL_API_CREATE_LOOPBACK_CRC);
+
+	clib_memset(&mp, 0, sizeof(mp));
+	mp._vl_msg_id = ntohs(msg_id);
+
+	sw_if_index = ~0;
+
+	err = NAAS_API_INVOKE(mp, rp);
+	if (err.type == NAAS_ERR_VNET) {
+		sw_if_index = ntohl(rp->sw_if_index);
+	}
+	naas_api_msg_free(rp);
+
+	*p_sw_if_index = sw_if_index;
+
+	naas_err_logf(LOG_INFO, err, "[VPP][API][create_loopback] sw_if_index=%u", sw_if_index);
+
+	return err;
+}
+
+naas_err_t
 naas_api_sw_interface_set_flags(uint32_t sw_if_index, vl_api_if_status_flags_t flags)
 {
 	int msg_id;
@@ -753,6 +782,12 @@ naas_api_ipsec_itf_create(int instance, uint32_t *p_sw_if_index)
 
 	return err;
 }
+
+//naas_err_t
+//naas_api_ipsec_itf_delete()
+//{
+//
+//}
 
 typedef struct naas_api_vl_api_ipsec_tunnel_protect_update {
 	vl_api_ipsec_tunnel_protect_update_t base;

@@ -182,35 +182,6 @@ def vpp_sswan(env, deps):
 	return lib
 
 
-def naas_route_based_updown(env, deps):
-	global libnaas_ld
-	sswan = get_sswan() 
-
-	cflags = [
-		'-I/' + sswan + '/src/libcharon/plugins/vici/',
-	]
-
-	ldflags = [
-		'-L/usr/lib/ipsec',
-		'-lstrongswan',
-		'-lvici',
-		libnaas_ld,
-	]
-
-	srcs = [
-		'naas-route-based-updown/main.c',
-	]
-
-	env = env.Clone()
-	env.Append(CFLAGS = flags_to_string(cflags))
-	env.Append(LINKFLAGS = flags_to_string(ldflags))
-	prog = env.Program('bin/naas-route-based-updown', srcs)
-	for dep in deps:
-		Requires(prog, dep)
-	install_prog(env, prog)
-	return prog
-
-
 def build_deb(env):
 	global git_version
 
@@ -227,7 +198,6 @@ def build_deb(env):
 	libnl_cli = libnl_path + "libnl-cli-3.so.200.27.0"
 
 	vpp_lcpd = "naas-vpp-lcpd"
-	route_based_updown = "naas-route-based-updown"
 
 	DEBFILES = [
 		("etc/ld.so.conf.d/ipsec.conf", "#libnaas/ld-ipsec.conf"),
@@ -236,9 +206,7 @@ def build_deb(env):
 		(libnl_route, "/" + libnl_route),
 		(libnl_cli, "/" + libnl_cli),
 		("usr/local/bin/" + vpp_lcpd, "#bin/" + vpp_lcpd),
-		("usr/local/bin/" + route_based_updown, "#bin/" + route_based_updown),
-		("etc/naas/naas-updown.sh", "#naas-route-based-updown/updown.sh"),
-		("etc/naas/kernel-vpp.conf", "#naas-route-based-updown/kernel-vpp.conf"),
+		("etc/naas/kernel-vpp.conf", "#vpp_sswan/kernel-vpp.conf"),
 		("etc/naas/libstrongswan-kernel-vpp.so", "#bin/libstrongswan-kernel-vpp.so"),
 	]
 
@@ -320,7 +288,6 @@ libnaas = build_libnaas(env)
 libstrongswan_kernel_vpp = vpp_sswan(env, [ libnaas ])
 
 naas_vpp_lcpd(env, [ libnaas ])
-naas_route_based_updown(env, [ libnaas ])
 
 if 'deb' in COMMAND_LINE_TARGETS:
 	build_deb(env)

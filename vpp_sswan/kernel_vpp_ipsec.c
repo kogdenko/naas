@@ -96,11 +96,8 @@ struct private_kernel_vpp_ipsec_t
    * Next security association database entry ID to allocate
    */
   refcount_t next_sad_id;
+  int loop_sw_if_index;
 
-  /**
-   * Next security policy database entry ID to allocate
-   */
-  refcount_t next_spd_id;
 
   /**
    * Mutex to lock access to installed policies
@@ -111,6 +108,8 @@ struct private_kernel_vpp_ipsec_t
    * Hash table of instaled SA, as kernel_ipsec_sa_id_t => sa_t
    */
   hashtable_t *sas;
+
+  hashtable_t *in_sas;
 
   /**
    * Hash table of security policy databases, as nterface => spd_t
@@ -162,271 +161,10 @@ typedef struct
 } sa_t;
 
 /**
- * Security policy database
- */
-typedef struct
-{
-  /** VPP SPD ID */
-  uint32_t spd_id;
-  /** Networking interface ID restricting policy */
-  uint32_t sw_if_index;
-  /** Policy count for this SPD */
-  refcount_t policy_num;
-  /** Name of the interface the SPD is bound to */
-  char *if_name;
-} spd_t;
-
-/**
- * Installed route
- */
-typedef struct
-{
-  /** Name of the interface the route is bound to */
-  char *if_name;
-  /** Gateway of route */
-  host_t *gateway;
-  /** Destination network of route */
-  host_t *dst_net;
-  /** Prefix length of dst_net */
-  uint8_t prefixlen;
-  /** References for route */
-  refcount_t refs;
-} route_entry_t;
-
-#define htonll(x)                                                             \
-  ((1 == htonl (1)) ?                                                         \
-	   (x) :                                                                    \
-	   ((uint64_t) htonl ((x) &0xFFFFFFFF) << 32) | htonl ((x) >> 32))
-#define ntohll(x)                                                             \
-  ((1 == ntohl (1)) ?                                                         \
-	   (x) :                                                                    \
-	   ((uint64_t) ntohl ((x) &0xFFFFFFFF) << 32) | ntohl ((x) >> 32))
-
-CALLBACK (route_equals, bool, route_entry_t *a, va_list args)
-{
-  host_t *dst_net, *gateway;
-  uint8_t *prefixlen;
-  char *if_name;
-
-  VA_ARGS_VGET (args, if_name, gateway, dst_net, prefixlen);
-
-  return a->if_name && if_name && streq (a->if_name, if_name) &&
-	 a->gateway->ip_equals (a->gateway, gateway) &&
-	 a->dst_net->ip_equals (a->dst_net, dst_net) &&
-	 a->prefixlen == *prefixlen;
-}
-
-/**
- * Clean up a route entry
- */
-static void
-route_destroy (route_entry_t *this)
-{
-  this->dst_net->destroy (this->dst_net);
-  this->gateway->destroy (this->gateway);
-  free (this->if_name);
-  free (this);
-}
-
-static uint32_t get_sw_if_index ();
-
-static int
-set_arp (char *ipStr, char *if_name, bool add)
-{
-  vl_api_ip_neighbor_add_del_t mp;
-  vl_api_ip_neighbor_add_del_reply_t *rmp = NULL;
-  int rc = SUCCESS;
-  uint32_t sw_if_index = ~0;
-
-  FILE *fp;
-  int nread = 0;
-  size_t len = 0;
-  char *buffer = NULL;
-  char buf[2][20];
-  char *file = "/proc/net/arp";
-  unsigned char mac[8] = {
-    0,
-  };
-  struct in_addr addr = { 0 };
-  naas_err_t err;
-
-  if (if_name == NULL || ipStr == NULL)
-    {
-      DBG2 (DBG_KNL, "para is null\n");
-      rc = FAILED;
-      goto error;
-    }
-  DBG2 (DBG_KNL, "from kernel read mac\n");
-
-  memset (&mp, 0, sizeof (mp));
-  sw_if_index = get_sw_if_index (if_name);
-  if (sw_if_index == ~0)
-    {
-      DBG1 (DBG_KNL, "sw_if_index for %s not found", if_name);
-      goto error;
-    }
-
-  fp = fopen (file, "rb");
-  while (fp && ((nread = getline (&buffer, &len, fp)) != -1))
-    {
-      sscanf (buffer, "%s %*s %*s %s %*s %*s", buf[0], buf[1]);
-      inet_aton (buf[0], &addr);
-
-      if (addr.s_addr == *((u32 *) (ipStr)))
-	{
-	  sscanf (buf[1], "%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx", &mac[0], &mac[1],
-		  &mac[2], &mac[3], &mac[4], &mac[5]);
-	  u16 msg_id =
-	    vl_msg_api_get_msg_index ((u8 *) "ip_neighbor_add_del_0607c257");
-	  mp._vl_msg_id = htons (msg_id);
-	  mp.is_add = add;
-	  memcpy (mp.neighbor.ip_address.un.ip4, (u8 *) &addr, sizeof (addr));
-	  mp.neighbor.ip_address.af = 0;
-	  memcpy (mp.neighbor.mac_address, mac, 6);
-	  mp.neighbor.sw_if_index = htonl (sw_if_index);
-	  mp.neighbor.flags = 1;
-
-	  VAC_LOG("api: ip_neighbor_add_del");
-          err = NAAS_API_INVOKE (mp, rmp);
-          naas_api_msg_free (rmp);
-
-          if (err.num && err.type == NAAS_ERR_ERRNO)
-            {
-	      DBG1 (DBG_KNL, "vac %s neighbor entry",
-		    add ? "adding" : "removing");
-	      fclose (fp);
-	      goto error;
-
-             }
-          if (err.num && err.type == NAAS_ERR_VNET)
-            {
-	      DBG1 (DBG_KNL, "%s neighbor add rv:%d", add ? "add" : "remove",
-		    err.num);
-	      fclose (fp);
-	      goto error;
-
-             }
-
-	  fclose (fp);
-	  free (buffer);
-
-	  return rc;
-	}
-    }
-
-  if (fp != NULL)
-    {
-      fclose (fp);
-      fp = NULL;
-    }
-
-error:
-  if (buffer != NULL)
-    {
-      free (buffer);
-      buffer = NULL;
-    }
-  return rc;
-}
-
-static int
-add_Route (char *ipAddr, int len, char *mask, char *gateWay)
-{
-  int fd;
-  int rc = SUCCESS;
-  struct sockaddr_in _sin;
-  struct sockaddr_in *sin = &_sin;
-  struct rtentry rt;
-
-  do
-    {
-      fd = socket (AF_INET, SOCK_DGRAM, 0);
-      if (fd < 0)
-	{
-	  DBG2 (DBG_KNL, "addRoute: socket error\n");
-	  rc = FAILED;
-	  break;
-	}
-      memset (&rt, 0, sizeof (struct rtentry));
-      memset (sin, 0, sizeof (struct sockaddr_in));
-      sin->sin_family = AF_INET;
-      sin->sin_port = 0;
-
-      if (inet_aton (gateWay, &sin->sin_addr) < 0)
-	{
-	  rc = FAILED;
-	  break;
-	}
-      memcpy (&rt.rt_gateway, sin, sizeof (struct sockaddr_in));
-
-      ((struct sockaddr_in *) &rt.rt_dst)->sin_family = AF_INET;
-      memcpy (&((struct sockaddr_in *) &rt.rt_dst)->sin_addr, ipAddr, len);
-
-      ((struct sockaddr_in *) &rt.rt_genmask)->sin_family = AF_INET;
-      if (inet_aton (mask,
-		     &((struct sockaddr_in *) &rt.rt_genmask)->sin_addr) < 0)
-	{
-	  rc = FAILED;
-	  break;
-	}
-      rt.rt_flags = RTF_GATEWAY;
-      if (ioctl (fd, SIOCADDRT, &rt) < 0)
-	{
-	  rc = FAILED;
-	}
-    }
-  while (0);
-
-  close (fd);
-  return rc;
-}
-
-/*static int
-set_address (u32 ipAddr, u32 sw_if_index, bool add)
-{
-  char *out = NULL;
-  int out_len = 0;
-  vl_api_sw_interface_add_del_address_t *mp;
-  vl_api_sw_interface_add_del_address_reply_t *rmp;
-
-  int rc = SUCCESS;
-
-  mp = vl_msg_api_alloc (sizeof (*mp));
-  memset (mp, 0, sizeof (*mp));
-
-  u16 msg_id =
-    vl_msg_api_get_msg_index ((u8 *) "sw_interface_add_del_address_5463d73b");
-  mp->_vl_msg_id = htons (msg_id);
-  mp->is_add = add;
-  memcpy (mp->prefix.address.un.ip4, (u8 *) &ipAddr, sizeof (ipAddr));
-  mp->prefix.len = 24;
-  mp->sw_if_index = sw_if_index;
-
-  VAC_LOG("sw_interface_add_del_address");
-  if (vac->send (vac, (char *) mp, sizeof (*mp), &out, &out_len))
-    {
-      DBG2 (DBG_KNL, "vac %s neighbor entry", add ? "adding" : "removing");
-      goto error;
-    }
-  rmp = (void *) out;
-  if (rmp->retval)
-    {
-      DBG2 (DBG_KNL, "%s neighbor add rv:%d", add ? "add" : "remove",
-	    ntohl (rmp->retval));
-      goto error;
-    }
-  return rc;
-
-error:
-  free (out);
-  vl_msg_api_free (mp);
-  return rc;
-}*/
-
-/**
  * (Un)-install a single route
  */
-static void
+
+/*static void
 manage_route (private_kernel_vpp_ipsec_t *this, bool add,
 	      traffic_selector_t *dst_ts, host_t *src, host_t *dst)
 {
@@ -515,7 +253,7 @@ error:
   if (if_name != NULL)
     free (if_name);
   return;
-}
+}*/
 
 /**
  * Hash function for IPsec SA
@@ -540,22 +278,6 @@ sa_equals (kernel_ipsec_sa_id_t *sa, kernel_ipsec_sa_id_t *other_sa)
   return sa->src->ip_equals (sa->src, other_sa->src) &&
 	 sa->dst->ip_equals (sa->dst, other_sa->dst) &&
 	 sa->spi == other_sa->spi && sa->proto == other_sa->proto;
-}
-
-/**
- * Equality function for policy SPD
- */
-static bool
-policy_equals (vl_api_ipsec_spd_entry_t *policy,
-	       vl_api_ipsec_spd_entry_t *other_policy)
-{
-
-  /* change protocol due to legacy implementation of ANY protocol inside VPP */
-  if (other_policy->protocol == 255)
-    other_policy->protocol = 0;
-
-  /* return true if both policies are equal */
-  return !memcmp (policy, other_policy, sizeof (*policy));
 }
 
 /**
@@ -666,718 +388,62 @@ calculate_priority (policy_priority_t policy_priority, traffic_selector_t *src,
 #endif
 
 /**
- * Get sw_if_index from interface name
- */
-
-static int
-get_sw_if_index_handler(void *user0, void *user1, void *data, int len)
-{
-  uint32_t *sw_if_index = user0;
-  vl_api_sw_interface_details_t *rmp;
-
-  if (len < sizeof (*rmp))
-    return -EINVAL;
-  rmp = data;
-  *sw_if_index = ntohl (rmp->sw_if_index);
-  return 0;
-}
-
-static uint32_t
-get_sw_if_index (char *interface)
-{
-  int name_filter_len = 0, msg_len = 0;
-  vl_api_sw_interface_dump_t *mp;
-  uint32_t sw_if_index = ~0;
-
-  name_filter_len = strlen (interface);
-  msg_len = sizeof (*mp) + name_filter_len;
-  mp = vl_msg_api_alloc (msg_len);
-  clib_memset (mp, 0, msg_len);
-  u16 msg_id = vl_msg_api_get_msg_index ((u8 *) "sw_interface_dump_aa610c27");
-  mp->_vl_msg_id = htons (msg_id);
-  mp->name_filter_valid = TRUE;
-  mp->name_filter.length = htonl (name_filter_len);
-  memcpy ((char *) mp->name_filter.buf, interface, name_filter_len);
-
-  VAC_LOG("api: sw_interface_dump");
-  naas_api_dump (mp, msg_len, VL_API_SW_INTERFACE_DETAILS_CRC,
-      get_sw_if_index_handler, &sw_if_index, NULL);
-
-  vl_msg_api_free (mp);
-  return sw_if_index;
-}
-/**
  * (Un)-install a security policy database
  */
 
 
-static status_t
-spd_add_del (bool add, uint32_t spd_id)
-{
-  naas_err_t err;
-  vl_api_ipsec_spd_add_del_t mp;
-  vl_api_ipsec_spd_add_del_reply_t *rmp;
-  status_t rv = FAILED;
-
-  memset (&mp, 0, sizeof (mp));
-
-  u16 msg_id = vl_msg_api_get_msg_index ((u8 *) "ipsec_spd_add_del_20e89a95");
-  mp._vl_msg_id = htons (msg_id);
-  mp.is_add = add;
-  mp.spd_id = htonl (spd_id);
-
-  VAC_LOG("api: ipsec_spd_add_del");
-  err = NAAS_API_INVOKE (mp, rmp);
-  naas_api_msg_free (rmp);
-  if (err.num && err.type == NAAS_ERR_ERRNO)
-    {
-      DBG1 (DBG_KNL, "vac %s SPD failed", add ? "adding" : "removing");
-      goto error;
-    }
-  if (err.num && err.type == NAAS_ERR_VNET)
-    {
-      DBG1 (DBG_KNL, "%s SPD failed rv:%d", add ? "add" : "remove", err.num);
-      goto error;
-    }
-  rv = SUCCESS;
-
-error:
-  return rv;
-}
-
-int naas_api_ipsec_interface_add_del_spd(int is_add, uint32_t spd_id, uint32_t sw_if_index);
-
-/**
- * Enable or disable SPD on an insterface
- */
-static status_t
-interface_add_del_spd (bool add, uint32_t spd_id, uint32_t sw_if_index)
-{
-  naas_err_t err;
-  vl_api_ipsec_interface_add_del_spd_t mp;
-  vl_api_ipsec_interface_add_del_spd_reply_t *rmp;
-  status_t rv = FAILED;
-
-  memset (&mp, 0, sizeof (mp));
-  u16 msg_id =
-    vl_msg_api_get_msg_index ((u8 *) "ipsec_interface_add_del_spd_80f80cbb");
-  mp._vl_msg_id = htons (msg_id);
-  mp.is_add = add;
-  mp.spd_id = htonl (spd_id);
-  mp.sw_if_index = htonl (sw_if_index);
-  VAC_LOG("api: ipsec_interface_add_del_spd");
-  err = NAAS_API_INVOKE (mp, rmp);
-  naas_api_msg_free (rmp);
-  if (err.num && err.type == NAAS_ERR_ERRNO)
-    {
-      DBG1 (DBG_KNL, "vac %s interface SPD failed",
-	    add ? "adding" : "removing");
-      goto error;
-    }
-  if (err.num && err.type == NAAS_ERR_VNET)
-    {
-      DBG1 (DBG_KNL, "%s interface SPD failed rv:%d", add ? "add" : "remove", err.num);
-      goto error;
-    }
-  rv = SUCCESS;
-
-error:
-  return rv;
-}
-
-static int
-bypass_all (bool add, uint32_t spd_id, uint32_t sa_id)
-{
-  naas_err_t err;
-  vl_api_ipsec_spd_entry_add_del_t mp;
-  vl_api_ipsec_spd_entry_add_del_reply_t *rmp;
-  status_t rv = FAILED;
-
-  DBG2 (DBG_KNL, "bypass_all [%s] spd_id %d sa_id %d", add ? "ADD" : "DEL",
-	spd_id, sa_id);
-
-  memset (&mp, 0, sizeof (mp));
-
-  u16 msg_id =
-    vl_msg_api_get_msg_index ((u8 *) "ipsec_spd_entry_add_del_338b7411");
-  mp._vl_msg_id = ntohs (msg_id);
-  mp.is_add = add;
-  mp.entry.sa_id = ntohl (sa_id);
-  mp.entry.spd_id = ntohl (spd_id);
-  mp.entry.priority = ntohl (INT_MAX - POLICY_PRIORITY_PASS - 1);
-  mp.entry.is_outbound = 0;
-  mp.entry.policy = ntohl (IPSEC_API_SPD_ACTION_BYPASS);
-  memset (mp.entry.local_address_stop.un.ip6, 0xFF, 16);
-  memset (mp.entry.remote_address_stop.un.ip6, 0xFF, 16);
-  mp.entry.remote_port_start = mp.entry.local_port_start = ntohs (0);
-  mp.entry.remote_port_stop = mp.entry.local_port_stop = ntohs (0xFFFF);
-  mp.entry.protocol = IP_API_PROTO_ESP;
-
-  VAC_LOG("api: ipsec_spd_entry_add_del");
-  err = NAAS_API_INVOKE (mp, rmp);
-  naas_api_msg_free (rmp);
-  if (err.num && err.type == NAAS_ERR_ERRNO)
-    {
-      DBG1 (DBG_KNL, "vac %s SPD entry failed", add ? "adding" : "removing");
-      goto error;
-    }
-  if (err.num && err.type == NAAS_ERR_VNET)
-    {
-      DBG1 (DBG_KNL, "%s SPD entry failed rv:%d", add ? "add" : "remove", err.num);
-      goto error;
-    }
-  /* address "out" needs to be freed after vec->send */
-//  if (out != NULL)
-//    {
-//      free (out);
-//      out = NULL;
-//    }
-  mp.entry.is_outbound = 1;
-
-//  VAC_LOG("ipsec_spd_entry_add_del");
-//  if (vac->send (vac, (char *) mp, sizeof (*mp), &out, &out_len))
-
-  VAC_LOG("api: ipsec_spd_entry_add_del");
-  err = NAAS_API_INVOKE (mp, rmp);
-  naas_api_msg_free (rmp); 
-  if (err.num && err.type == NAAS_ERR_ERRNO)
-    {
-      DBG1 (DBG_KNL, "vac %s SPD entry failed", add ? "adding" : "removing");
-      goto error;
-    }
-  if (err.num && err.type == NAAS_ERR_VNET)
-    {
-      DBG1 (DBG_KNL, "%s SPD entry failed rv:%d", add ? "add" : "remove", err.num);
-      goto error;
-    }
-  /* address "out" needs to be freed after vec->send */
-//  if (out != NULL)
-//    {
-//      free (out);
-//      out = NULL;
-//    }
-
-  mp.entry.is_outbound = 0;
-  mp.entry.protocol = IP_API_PROTO_AH;
-
-  //if (vac->send (vac, (char *) mp, sizeof (*mp), &out, &out_len))
-
-  VAC_LOG("api: ipsec_spd_entry_add_del");
-  err = NAAS_API_INVOKE (mp, rmp);
-  naas_api_msg_free (rmp); 
-  if (err.num && err.type == NAAS_ERR_ERRNO)
-    {
-      DBG1 (DBG_KNL, "vac %s SPD entry failed", add ? "adding" : "removing");
-      goto error;
-    }
-  if (err.num && err.type == NAAS_ERR_VNET)
-    {
-      DBG1 (DBG_KNL, "%s SPD entry failed rv:%d", add ? "add" : "remove", err.num);
-      goto error;
-    }
-  /* address "out" needs to be freed after vec->send */
-//  if (out != NULL)
-//    {
-//      free (out);
-//      out = NULL;
-//    }
-
-  mp.entry.is_outbound = 1;
-//  VAC_LOG("ipsec_spd_entry_add_del");
-//  if (vac->send (vac, (char *) mp, sizeof (*mp), &out, &out_len))
-
-  VAC_LOG("api: ipsec_spd_entry_add_del");
-  err = NAAS_API_INVOKE (mp, rmp);
-  naas_api_msg_free (rmp); 
-  if (err.num && err.type == NAAS_ERR_ERRNO)
-    {
-      DBG1 (DBG_KNL, "vac %s SPD entry failed", add ? "adding" : "removing");
-      goto error;
-    }
-  if (err.num && err.type == NAAS_ERR_VNET)
-    {
-      DBG1 (DBG_KNL, "%s SPD entry failed rv:%d", add ? "add" : "remove", err.num);
-      goto error;
-    }
-
-  rv = SUCCESS;
-
-error:
-//  if (out)
-//    free (out);
-//  vl_msg_api_free (mp);
-
-  return rv;
-}
-
-static int
-bypass_port (bool add, uint32_t spd_id, uint32_t sa_id, uint16_t port)
-{
-  naas_err_t err;
-  vl_api_ipsec_spd_entry_add_del_t mp;
-  vl_api_ipsec_spd_entry_add_del_reply_t *rmp;
-  status_t rv = FAILED;
-
-  memset (&mp, 0, sizeof (mp));
-
-  u16 msg_id =
-    vl_msg_api_get_msg_index ((u8 *) "ipsec_spd_entry_add_del_338b7411");
-  mp._vl_msg_id = ntohs (msg_id);
-  mp.is_add = add;
-  mp.entry.sa_id = ntohl (sa_id);
-  mp.entry.spd_id = ntohl (spd_id);
-  mp.entry.priority = ntohl (INT_MAX - POLICY_PRIORITY_PASS - 1);
-  mp.entry.policy = ntohl (IPSEC_API_SPD_ACTION_BYPASS);
-  memset (mp.entry.local_address_stop.un.ip6, 0xFF, 16);
-  memset (mp.entry.remote_address_stop.un.ip6, 0xFF, 16);
-  mp.entry.is_outbound = 0;
-  mp.entry.remote_port_start = mp.entry.local_port_start = ntohs (0);
-  mp.entry.remote_port_stop = mp.entry.local_port_stop = ntohs (0xFFFF);
-  mp.entry.protocol = IP_API_PROTO_HOPOPT;
-
-//  VAC_LOG("ipsec_spd_entry_add_del");
-//  if (vac->send (vac, (char *) mp, sizeof (*mp), &out, &out_len))
-
-  err = NAAS_API_INVOKE (mp, rmp);
-  naas_api_msg_free (rmp); 
-  if (err.num && err.type == NAAS_ERR_ERRNO)
-    {
-      DBG1 (DBG_KNL, "vac %s SPD entry failed", add ? "adding" : "removing");
-      goto error;
-    }
-  if (err.num && err.type == NAAS_ERR_VNET)
-    {
-      DBG1 (DBG_KNL, "%s SPD entry failed rv:%d", add ? "add" : "remove", err.num);
-      goto error;
-    }
-  /* address "out" needs to be freed after vec->send */
-//  if (out != NULL)
-//    {
-//      free (out);
-//      out = NULL;
-//    }
-  mp.entry.is_outbound = 1;
-//  if (vac->send (vac, (char *) mp, sizeof (*mp), &out, &out_len))
-  VAC_LOG("api: ipsec_spd_entry_add_del");
-  err = NAAS_API_INVOKE (mp, rmp);
-  naas_api_msg_free (rmp);
-  if (err.num && err.type == NAAS_ERR_ERRNO)
-    {
-      DBG1 (DBG_KNL, "vac %s SPD entry failed", add ? "adding" : "removing");
-      goto error;
-    }
-  if (err.num && err.type == NAAS_ERR_VNET)
-    {
-      DBG1 (DBG_KNL, "%s SPD entry failed rv:%d", add ? "add" : "remove", err.num);
-      goto error;
-    }
-  rv = SUCCESS;
-
-error:
-//  if (out)
-//    free (out);
-//  vl_msg_api_free (mp);
-
-  return rv;
-}
-
-/**
- * Add or remove a bypass policy
- */
-static status_t
-manage_bypass (bool add, uint32_t spd_id, uint32_t sa_id)
-{
-  uint16_t port;
-  status_t rv;
-
-  bypass_all (add, spd_id, sa_id);
-
-  port =
-    lib->settings->get_int (lib->settings, "%s.port", IKEV2_UDP_PORT, lib->ns);
-
-  if (port)
-    {
-      rv = bypass_port (add, spd_id, sa_id, port);
-      if (rv != SUCCESS)
-	{
-	  return rv;
-	}
-    }
-
-  port = lib->settings->get_int (lib->settings, "%s.port_nat_t",
-				 IKEV2_NATT_PORT, lib->ns);
-  if (port)
-    {
-      rv = bypass_port (add, spd_id, sa_id, port);
-      if (rv != SUCCESS)
-	{
-	  return rv;
-	}
-    }
-
-  return SUCCESS;
-}
-
-/**
- * Add or remove a policy
- */
-static int
-ipsec_spd_dump_handler(void *user0, void *user1, void *data, int len)
-{
-  vl_api_ipsec_spd_details_t *rmp_dump;
-  vl_api_ipsec_spd_entry_add_del_t *mp;
-
-  int *found;
-
-  found = user0;
-  mp = user1;
-
-  rmp_dump = data;
-
-  if (len < sizeof(*rmp_dump))
-    return -EINVAL;
-
-  if (policy_equals (&mp->entry, &rmp_dump->entry))
-    {
-      *found = 1;
-      return -EAGAIN;
-    }
-
-  return 0;
-}
 
 static status_t
-manage_policy (private_kernel_vpp_ipsec_t *this, bool add,
-	       kernel_ipsec_policy_id_t *id,
-	       kernel_ipsec_manage_policy_t *data)
+manage_policy(private_kernel_vpp_ipsec_t *this, bool add, kernel_ipsec_policy_id_t *id,
+		kernel_ipsec_manage_policy_t *data)
 {
-  naas_err_t err;
-  spd_t *spd = NULL;
-  char *interface = NULL;
-  uint32_t sw_if_index, spd_id = ~0, sad_id = ~0;
-  status_t rv = FAILED;
-  chunk_t src_from, src_to, dst_from, dst_to;
-  host_t *src = NULL, *dst = NULL, *addr = NULL;
-  vl_api_ipsec_spd_entry_add_del_t mp;
-  vl_api_ipsec_spd_entry_add_del_reply_t *rmp = NULL;
-  bool n_spd = false;
-  vl_api_ipsec_spd_dump_t mp_dump;
+	uint32_t reqid, sa_id, in_sa_id, sw_if_index;
 
-  memset (&mp, 0, sizeof (mp));
+	this->mutex->lock (this->mutex);
 
-  this->mutex->lock (this->mutex);
-  VAC_LOG("manage policy: %d", id->dir);
-  if (id->dir == POLICY_FWD)
-    {
-      DBG1 (DBG_KNL, "policy FWD interface");
-      rv = SUCCESS;
-      goto error;
-    }
+	reqid = data->sa->reqid;
 
-  // FIXME: >>>>>>>>
-  rv = SUCCESS;
-  goto error;
-  // <<<<<<<<<<<<<<<
+	if (add) {
+		kernel_ipsec_sa_id_t sa_key = {
+			.src = data->src,
+			.dst = data->dst,
+			.proto = data->sa->esp.use ? IPPROTO_ESP : IPPROTO_AH,
+			.spi = data->sa->esp.use ? data->sa->esp.spi : data->sa->ah.spi,
+		};
+		sa_t *sa = NULL;
+		sa = this->sas->get(this->sas, &sa_key);
+		sa_id = sa->sa_id;
 
-  addr = id->dir == POLICY_IN ? data->dst : data->src;
-  for (int i = 0; i < N_RETRY_GET_IF; i++)
-    {
-      if (!charon->kernel->get_interface (charon->kernel, addr, &interface))
-	{
-	  DBG1 (DBG_KNL, "policy no interface %H", addr);
-	  free (interface);
-	  interface = NULL;
-	  sleep (1);
+		if (id->dir == POLICY_IN) {
+			this->in_sas->put(this->in_sas, (void*)(uintptr_t)reqid, (void *)(uintptr_t)sa_id);
+		}
+
+		if (id->dir == POLICY_OUT) {
+	//		in_sa_id = (uintptr_t)this->in_sas->get(this->in_sas, (void*)(uintptr_t)reqid);
+			in_sa_id = (uintptr_t)this->in_sas->remove(this->in_sas, (void*)(uintptr_t)reqid);
+
+			host_t *dst_net = NULL;
+			struct sockaddr_in *addr;
+			uint8_t prefixlen;
+			id->dst_ts->to_subnet(id->dst_ts, &dst_net, &prefixlen);
+			addr = (struct sockaddr_in *)dst_net->get_sockaddr(dst_net);
+
+
+			VAC_LOG("add policy: sa=%d/%d, reqid=%d, dir=%d loop=%d",
+				in_sa_id, sa_id, reqid, id->dir, this->loop_sw_if_index);
+			naas_api_ipsec_itf_create(reqid, &sw_if_index);
+			naas_api_sw_interface_set_unnumbered(1, this->loop_sw_if_index, sw_if_index);
+			naas_api_sw_interface_set_flags(sw_if_index, IF_STATUS_API_FLAG_ADMIN_UP);
+			naas_api_ip_route_add_del(1, addr->sin_addr, prefixlen, sw_if_index);
+			naas_api_ipsec_tunnel_protect_update(sw_if_index, in_sa_id, sa_id);
+		}
+
+	} else {
+		VAC_LOG("del policy: dir=%d", id->dir);
 	}
 
-      if (interface)
-	{
-	  DBG1 (DBG_KNL, "policy have interface %H", addr);
-	  break;
-	}
-    }
-  if (!interface)
-    goto error;
-
-  DBG2 (DBG_KNL, "manage policy [%s] interface [%s]", add ? "ADD" : "DEL",
-	interface);
-
-  spd = this->spds->get (this->spds, interface);
-  if (!spd)
-    {
-      if (!add)
-	{
-	  DBG1 (DBG_KNL, "SPD for %s not found, should not be deleted",
-		interface);
-	  goto error;
-	}
-      sw_if_index = get_sw_if_index (interface);
-      DBG1 (DBG_KNL, "firstly created, spd for %s found sw_if_index is %d",
-	    interface, sw_if_index);
-      if (sw_if_index == ~0)
-	{
-	  DBG1 (DBG_KNL, "sw_if_index for %s not found", interface);
-	  goto error;
-	}
-      spd_id = ref_get (&this->next_spd_id);
-      if (spd_add_del (TRUE, spd_id))
-	{
-	  DBG1 (DBG_KNL, "spd_add_del %d failed!!!!!", spd_id);
-	  goto error;
-	}
-      if (interface_add_del_spd (TRUE, spd_id, sw_if_index))
-	{
-	  DBG1 (DBG_KNL, "interface_add_del_spd  %d %d failed!!!!!", spd_id,
-		sw_if_index);
-	  goto error;
-	}
-      INIT (spd, .spd_id = spd_id, .sw_if_index = sw_if_index, .policy_num = 0,
-	    .if_name = strdup (interface), );
-      this->spds->put (this->spds, spd->if_name, spd);
-      n_spd = true;
-    }
-
-  //auto_priority = calculate_priority (data->prio, id->src_ts, id->dst_ts);
-  //priority = data->manual_prio ? data->manual_prio : auto_priority;
-
-  u16 msg_id =
-    vl_msg_api_get_msg_index ((u8 *) "ipsec_spd_entry_add_del_338b7411");
-  mp._vl_msg_id = htons (msg_id);
-  mp.is_add = add;
-  mp.entry.spd_id = htonl (spd->spd_id);
-  mp.entry.priority = htonl (INT_MAX - POLICY_PRIORITY_PASS);
-  mp.entry.is_outbound = id->dir == POLICY_OUT;
-  switch (data->type)
-    {
-    case POLICY_IPSEC:
-      mp.entry.policy = htonl (IPSEC_API_SPD_ACTION_PROTECT);
-      break;
-    case POLICY_PASS:
-      mp.entry.policy = htonl (IPSEC_API_SPD_ACTION_BYPASS);
-      break;
-    case POLICY_DROP:
-      mp.entry.policy = htonl (IPSEC_API_SPD_ACTION_DISCARD);
-      break;
-    }
-  if ((data->type == POLICY_IPSEC) && data->sa)
-    {
-      kernel_ipsec_sa_id_t id = {
-	.src = data->src,
-	.dst = data->dst,
-	.proto = data->sa->esp.use ? IPPROTO_ESP : IPPROTO_AH,
-	.spi = data->sa->esp.use ? data->sa->esp.spi : data->sa->ah.spi,
-      };
-      sa_t *sa = NULL;
-      sa = this->sas->get (this->sas, &id);
-      if (!sa)
-	{
-	  DBG1 (DBG_KNL, "SA ID not found");
-	  goto error;
-	}
-      sad_id = sa->sa_id;
-      if (n_spd)
-	{
-	  if (manage_bypass (TRUE, spd_id, ~0))
-	    {
-	      DBG1 (DBG_KNL, "manage_bypass %d failed!!!!", spd_id);
-	      goto error;
-	    }
-	}
-    }
-
-  mp.entry.sa_id = htonl (sad_id);
-
-  bool is_ipv6 = false;
-  if (id->src_ts->get_type (id->src_ts) == TS_IPV6_ADDR_RANGE)
-    {
-      is_ipv6 = true;
-      mp.entry.local_address_start.af = htonl (ADDRESS_IP6);
-      mp.entry.local_address_stop.af = htonl (ADDRESS_IP6);
-      mp.entry.remote_address_start.af = htonl (ADDRESS_IP6);
-      mp.entry.remote_address_stop.af = htonl (ADDRESS_IP6);
-    }
-  else
-    {
-      mp.entry.local_address_start.af = htonl (ADDRESS_IP4);
-      mp.entry.local_address_stop.af = htonl (ADDRESS_IP4);
-      mp.entry.remote_address_start.af = htonl (ADDRESS_IP4);
-      mp.entry.remote_address_stop.af = htonl (ADDRESS_IP4);
-    }
-  mp.entry.protocol = id->src_ts->get_protocol (id->src_ts);
-
-  if (id->dir == POLICY_OUT)
-    {
-      src_from = id->src_ts->get_from_address (id->src_ts);
-      src_to = id->src_ts->get_to_address (id->src_ts);
-      src = host_create_from_chunk (is_ipv6 ? AF_INET6 : AF_INET, src_to, 0);
-      dst_from = id->dst_ts->get_from_address (id->dst_ts);
-      dst_to = id->dst_ts->get_to_address (id->dst_ts);
-      dst = host_create_from_chunk (is_ipv6 ? AF_INET6 : AF_INET, dst_to, 0);
-    }
-  else
-    {
-      dst_from = id->src_ts->get_from_address (id->src_ts);
-      dst_to = id->src_ts->get_to_address (id->src_ts);
-      dst = host_create_from_chunk (is_ipv6 ? AF_INET6 : AF_INET, dst_from, 0);
-      src_from = id->dst_ts->get_from_address (id->dst_ts);
-      src_to = id->dst_ts->get_to_address (id->dst_ts);
-      src = host_create_from_chunk (is_ipv6 ? AF_INET6 : AF_INET, src_from, 0);
-    }
-
-  if (src->is_anyaddr (src) && dst->is_anyaddr (dst))
-    {
-      memset (mp.entry.local_address_stop.un.ip6, 0xFF, 16);
-      memset (mp.entry.remote_address_stop.un.ip6, 0xFF, 16);
-    }
-  else
-    {
-      memcpy (is_ipv6 ? mp.entry.local_address_start.un.ip6 :
-			      mp.entry.local_address_start.un.ip4,
-	      src_from.ptr, src_from.len);
-      memcpy (is_ipv6 ? mp.entry.local_address_stop.un.ip6 :
-			      mp.entry.local_address_stop.un.ip4,
-	      src_to.ptr, src_to.len);
-      memcpy (is_ipv6 ? mp.entry.remote_address_start.un.ip6 :
-			      mp.entry.remote_address_start.un.ip4,
-	      dst_from.ptr, dst_from.len);
-      memcpy (is_ipv6 ? mp.entry.remote_address_stop.un.ip6 :
-			      mp.entry.remote_address_stop.un.ip4,
-	      dst_to.ptr, dst_to.len);
-    }
-  mp.entry.local_port_start = htons (id->src_ts->get_from_port (id->src_ts));
-  mp.entry.local_port_stop = htons (id->src_ts->get_to_port (id->src_ts));
-  mp.entry.remote_port_start = htons (id->dst_ts->get_from_port (id->dst_ts));
-  mp.entry.remote_port_stop = htons (id->dst_ts->get_to_port (id->dst_ts));
-
-  /* check if policy exists in SPD */
-  memset (&mp_dump, 0, sizeof (mp_dump));
-
-  msg_id = vl_msg_api_get_msg_index ((u8 *) "ipsec_spd_dump_afefbf7d");
-  mp_dump._vl_msg_id = htons (msg_id);
-  mp_dump.spd_id = htonl (spd->spd_id);
-  mp_dump.sa_id = htonl (sad_id);
-
-//  VAC_LOG("ipsec_spd_dump");
-//  if (vac->send_dump (vac, (char *) mp_dump, sizeof (*mp_dump), &out,
-//		      &out_len))
-//    {
-//      DBG1 (DBG_KNL, "vac %s SPD lookup failed", add ? "adding" : "removing");
-//      goto error;
-//    }
-
-//  int num = out_len / sizeof (*rmp_dump);
-//  tmp = (void *) out;
-
-  /* found existing policy */
-  if (add)
-    {
-      int found = 0;
-      VAC_LOG("api: ipsec_spd_dump");
-      naas_api_dump(&mp_dump, sizeof(mp_dump), VL_API_IPSEC_SPD_DETAILS_CRC,
-          ipsec_spd_dump_handler, &found, &mp);
-      if (found)
-        goto next;
-//      int i;
-//      for (i = 0; i < num; i++)
-//	{
-//	  rmp_dump = tmp;
-//	  tmp += 1;
-//	  /* check if found entry equals the new one */
-//	  if (policy_equals (&mp.entry, &rmp_dump->entry))
-//	    goto next;
-//	}
-    }
-//  else if (!add && num == 0)
-//    {
-//      /* VPP doesn't have any policy to delete */
-//      goto next;
-//    }
-
-//  free (out);
-
-  VAC_LOG("api: ipsec_spd_entry_add_del");
-  err = NAAS_API_INVOKE (mp, rmp);
-  naas_api_msg_free (rmp);
-
-//  if (vac->send (vac, (char *) &mp, sizeof (mp), &out, &out_len))
-  if (err.num && err.type == NAAS_ERR_ERRNO)
-    {
-      DBG1 (DBG_KNL, "vac %s SPD entry failed", add ? "adding" : "removing");
-      goto error;
-    }
-  if (err.num && err.type == NAAS_ERR_VNET)
-    {
-      DBG1 (DBG_KNL, "%s SPD entry failed rv:%d", add ? "add" : "remove", err.num);
-      goto error;
-    }
-
-next:
-  if (add)
-    {
-      ref_get (&spd->policy_num);
-    }
-  else
-    {
-      if (ref_put (&spd->policy_num))
-	{
-	  DBG1 (
-	    DBG_KNL,
-	    "policy_num's ref is 0, delete spd_id %d sw_if_index %d sad_id %x",
-	    spd->spd_id, spd->sw_if_index, sad_id);
-	  interface_add_del_spd (FALSE, spd->spd_id, spd->sw_if_index);
-	  manage_bypass (FALSE, spd->spd_id, sad_id);
-	  spd_add_del (FALSE, spd->spd_id);
-	  this->spds->remove (this->spds, interface);
-	  if (spd->if_name)
-	    {
-	      free (spd->if_name);
-	      spd->if_name = NULL;
-	    }
-	  if (spd)
-	    {
-	      free (spd);
-	      spd = NULL;
-	    }
-	}
-    }
-
-  if (this->install_routes && id->dir == POLICY_OUT && !mp.entry.protocol)
-    {
-      if (data->type == POLICY_IPSEC && data->sa->mode != MODE_TRANSPORT)
-	{
-	  VAC_LOG("manage_policy: +route");
-	  manage_route (this, add, id->dst_ts, data->src, data->dst);
-	}
-    }
-  rv = SUCCESS;
-error:
-  VAC_LOG("XXXX %d %d %d",
-	id->dir == POLICY_OUT,
-	data->type == POLICY_IPSEC,
-	data->sa->mode != MODE_TRANSPORT);
-
-  if (id->dir == POLICY_OUT &&
-      data->type == POLICY_IPSEC &&
-      data->sa->mode != MODE_TRANSPORT)
-    {
-        host_t *dst_net = NULL;
-        uint8_t prefixlen;
-
-	id->dst_ts->to_subnet (id->dst_ts, &dst_net, &prefixlen);
-
-        DBG2 (DBG_KNL, "installing route: %H", dst_net);
-    }
-
-
-
-  if (src != NULL)
-    src->destroy (src);
-  if (dst != NULL)
-    dst->destroy (dst);
-  if (interface != NULL)
-    free (interface);
-  this->mutex->unlock (this->mutex);
-  return rv;
+	this->mutex->unlock (this->mutex);
+	return SUCCESS;
 }
 
 METHOD (kernel_ipsec_t, get_features, kernel_feature_t,
@@ -2038,7 +1104,10 @@ METHOD (kernel_ipsec_t, destroy, void, private_kernel_vpp_ipsec_t *this)
 kernel_vpp_ipsec_t *
 kernel_vpp_ipsec_create ()
 {
+  uint32_t sw_if_index;
   private_kernel_vpp_ipsec_t *this;
+
+  naas_api_create_loopback(&sw_if_index);
 
   INIT(this,
         .public = {
@@ -2061,10 +1130,11 @@ kernel_vpp_ipsec_create ()
             },
         },
         .next_sad_id = 0,
-        .next_spd_id = 0,
+	.loop_sw_if_index = sw_if_index,
         .mutex = mutex_create(MUTEX_TYPE_DEFAULT),
         .sas = hashtable_create((hashtable_hash_t)sa_hash,
                                 (hashtable_equals_t)sa_equals, 32),
+	.in_sas = hashtable_create(hashtable_hash_ptr, hashtable_equals_ptr, 4),
         .spds = hashtable_create((hashtable_hash_t)interface_hash,
                                  (hashtable_equals_t)interface_equals, 4),
         .routes = linked_list_create(),

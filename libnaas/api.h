@@ -69,6 +69,8 @@ typedef void (*naas_api_sw_interface_dump_f)(void *user, struct naas_api_sw_inte
 naas_err_t naas_api_sw_interface_dump(naas_api_sw_interface_dump_f handler, void *user,
 		const char *name_filter);
 
+naas_err_t naas_api_create_loopback(uint32_t *p_sw_if_index);
+
 naas_err_t naas_api_sw_interface_set_flags(uint32_t sw_if_index, vl_api_if_status_flags_t flags);
 
 naas_err_t naas_api_sw_interface_set_unnumbered(int is_add, uint32_t sw_if_index,
@@ -95,6 +97,8 @@ naas_err_t naas_api_sr_steering_add_del(int is_add, int phy_sw_if_index, int fam
 naas_err_t naas_api_ipsec_spd_add_del(int is_add, uint32_t spd_id);
 
 naas_err_t naas_api_ipsec_itf_create(int instance, uint32_t *sw_if_index);
+
+naas_err_t naas_api_ipsec_itf_delete();
 
 naas_err_t naas_api_ipsec_spd_add_del(int is_add, uint32_t spd_id);
 

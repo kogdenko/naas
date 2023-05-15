@@ -228,6 +228,35 @@ naas_api_dump(void *mp, int mlen, char *details_msg_name, naas_api_dump_handler_
 	return rc;
 }
 
+naas_err_t
+naas_api_show_version(vl_api_show_version_reply_t *ver)
+{
+	int msg_id;
+	naas_err_t err;
+	vl_api_show_version_t mp;
+	vl_api_show_version_reply_t *rp;
+	
+	msg_id = vac_get_msg_index(VL_API_SHOW_VERSION_CRC);
+
+	clib_memset(&mp, 0, sizeof(mp));
+	mp._vl_msg_id = ntohs(msg_id);
+
+	err = NAAS_API_INVOKE(mp, rp);
+	if (err.type == NAAS_ERR_VNET) {
+		memcpy(ver, rp, sizeof(*ver));
+	} else {
+		clib_memset(ver, 0, sizeof(ver));
+	}
+	naas_api_msg_free(rp);
+
+	naas_err_logf(LOG_INFO, err,
+"[VPP][API][show_version] program=%s, version=%s, build_date=%s, build_directory=%s",
+		ver->program, ver->version, ver->build_date, ver->build_directory);
+
+	return err;
+
+}
+
 static int
 naas_api_sw_interface_details(void *user0, void *user, void *data, int len)
 {
@@ -448,9 +477,6 @@ naas_api_lcp_itf_pair_get(naas_api_lcp_itf_pair_get_f handler, void *user)
 	naas_err_t err;
 	vl_api_lcp_itf_pair_get_t mp;
 	vl_api_lcp_itf_pair_get_reply_t *reply;
-	api_main_t *am;
-
-	am = vlibapi_get_main();
 
 	msg_id = vac_get_msg_index(VL_API_LCP_ITF_PAIR_GET_CRC);
 	reply_msg_id = vac_get_msg_index(VL_API_LCP_ITF_PAIR_GET_REPLY_CRC);
@@ -458,7 +484,6 @@ naas_api_lcp_itf_pair_get(naas_api_lcp_itf_pair_get_f handler, void *user)
 
 	clib_memset(&mp, 0, sizeof(mp));
 	mp._vl_msg_id = ntohs(msg_id);
-	mp.client_index = am->my_client_index;
 	mp.cursor = htonl(0);
 
 	rc = naas_vac_write((void *)&mp, sizeof(mp));
@@ -505,15 +530,11 @@ naas_api_set_sr_encaps_source_addr(struct in6_addr *addr)
 	char addrstr[INET6_ADDRSTRLEN];
 	vl_api_sr_set_encap_source_t mp;
 	vl_api_sr_set_encap_source_reply_t *rp;
-	api_main_t *am;
-
-	am = vlibapi_get_main();
 
 	msg_id = vac_get_msg_index(VL_API_SR_SET_ENCAP_SOURCE_CRC);
 
 	clib_memset(&mp, 0, sizeof(mp));
 	mp._vl_msg_id = ntohs(msg_id);
-	mp.client_index = am->my_client_index;
 	clib_memcpy(mp.encaps_source, addr, 16);
 
 	err = NAAS_API_INVOKE(mp, rp);
@@ -536,15 +557,11 @@ naas_api_ip_table_add_del(int is_add, int is_ip6, int table_id)
 	naas_err_t err;
 	vl_api_ip_table_add_del_t mp;
 	vl_api_ip_table_add_del_reply_t *rp;
-	api_main_t *am;
-
-	am = vlibapi_get_main();
 
 	msg_id = vac_get_msg_index(VL_API_IP_TABLE_ADD_DEL_CRC);
 
 	clib_memset(&mp, 0, sizeof(mp));
 	mp._vl_msg_id = ntohs(msg_id);
-	mp.client_index = am->my_client_index;
 	mp.table.table_id = ntohl(table_id);
 	mp.table.is_ip6 = is_ip6;
 	mp.is_add = is_add;
@@ -576,15 +593,11 @@ naas_api_sr_localsid_add_del(int is_add, int behavior, void *addr, int table_id)
 	char localsid_addrstr[INET6_ADDRSTRLEN];
 	vl_api_sr_localsid_add_del_t mp;
 	vl_api_sr_localsid_add_del_reply_t *rp;
-	api_main_t *am;
-
-	am = vlibapi_get_main();
 
 	msg_id = vac_get_msg_index(VL_API_SR_LOCALSID_ADD_DEL_CRC);
 
 	clib_memset(&mp, 0, sizeof(mp));
 	mp._vl_msg_id = ntohs(msg_id);
-	mp.client_index = am->my_client_index;
 	mp.is_del = !is_add;
 	clib_memcpy(mp.localsid, addr, sizeof(mp.localsid));
 	mp.sw_if_index = htonl(table_id);	
@@ -611,7 +624,6 @@ naas_api_sr_policy_add(uint8_t *bsid, struct in6_addr *segments, int first_segme
 	naas_err_t err;
 	vl_api_sr_policy_add_t mp;
 	vl_api_sr_policy_add_reply_t *rp;
-	api_main_t *am;
 
 	if (first_segment >= NAAS_ARRAY_SIZE(mp.sids.sids)) {
 		naas_logf(LOG_ERR, 0, "[VPP][API][sr_policy_add] failed (sids limit exceeded)");
@@ -620,13 +632,10 @@ naas_api_sr_policy_add(uint8_t *bsid, struct in6_addr *segments, int first_segme
 		return err;
 	}
 
-	am = vlibapi_get_main();
-
 	msg_id = vac_get_msg_index(VL_API_SR_POLICY_ADD_CRC);
 
 	clib_memset(&mp, 0, sizeof(mp));
 	mp._vl_msg_id = ntohs(msg_id);
-	mp.client_index = am->my_client_index;
 	clib_memcpy(mp.bsid_addr, bsid, 16);
 	mp.is_encap = true;
 	mp.sids.num_sids = first_segment + 1;
@@ -652,15 +661,10 @@ naas_api_sr_policy_del(uint8_t *bsid)
 	vl_api_sr_policy_del_t mp;
 	vl_api_sr_policy_del_reply_t *rp;
 
-	api_main_t *am;
-
-	am = vlibapi_get_main();
-
 	msg_id = vac_get_msg_index(VL_API_SR_POLICY_DEL_CRC);
 
 	clib_memset(&mp, 0, sizeof(mp));
 	mp._vl_msg_id = ntohs(msg_id);
-	mp.client_index = am->my_client_index;
 	clib_memcpy(mp.bsid_addr, bsid, 16);
 
 	err = NAAS_API_INVOKE(mp, rp);
@@ -687,15 +691,11 @@ naas_api_sr_steering_add_del(int is_add, int phy_sw_if_index,
 	naas_err_t err;
 	vl_api_sr_steering_add_del_t mp;
 	vl_api_sr_steering_add_del_reply_t *rp;
-	api_main_t *am;
-
-	am = vlibapi_get_main();
 
 	msg_id = vac_get_msg_index(VL_API_SR_STEERING_ADD_DEL_CRC);
 
 	clib_memset(&mp, 0, sizeof(mp));
 	mp._vl_msg_id = ntohs(msg_id);
-	mp.client_index = am->my_client_index;
 	mp.is_del = !is_add;
 	mp.table_id = htonl(table_id);
 	clib_memcpy(mp.bsid_addr, bsid, 16);
@@ -724,15 +724,11 @@ naas_api_ipsec_spd_add_del(int is_add, uint32_t spd_id)
 	naas_err_t err;
 	vl_api_ipsec_spd_add_del_t mp;
 	vl_api_ipsec_spd_add_del_reply_t *rp;
-	api_main_t *am;
-
-	am = vlibapi_get_main();
 
 	msg_id = vac_get_msg_index(VL_API_IPSEC_SPD_ADD_DEL_CRC);
 
 	clib_memset(&mp, 0, sizeof(mp));
 	mp._vl_msg_id = ntohs(msg_id);
-	mp.client_index = am->my_client_index;
 	mp.is_add = is_add;
 	mp.spd_id = htonl(spd_id);
 
@@ -753,15 +749,11 @@ naas_api_ipsec_itf_create(int instance, uint32_t *p_sw_if_index)
 	naas_err_t err;
 	vl_api_ipsec_itf_create_t mp;
 	vl_api_ipsec_itf_create_reply_t *rp;
-	api_main_t *am;
-
-	am = vlibapi_get_main();
 
 	msg_id = vac_get_msg_index(VL_API_IPSEC_ITF_CREATE_CRC);
 
 	clib_memset(&mp, 0, sizeof(mp));
 	mp._vl_msg_id = ntohs(msg_id);
-	mp.client_index = am->my_client_index;
 	mp.itf.mode =  TUNNEL_API_MODE_P2P;
 	mp.itf.user_instance = htonl(instance);
 
@@ -783,11 +775,27 @@ naas_api_ipsec_itf_create(int instance, uint32_t *p_sw_if_index)
 	return err;
 }
 
-//naas_err_t
-//naas_api_ipsec_itf_delete()
-//{
-//
-//}
+naas_err_t
+naas_api_ipsec_itf_delete(uint32_t sw_if_index)
+{
+	int msg_id;
+	naas_err_t err;
+	vl_api_ipsec_itf_delete_t mp;
+	vl_api_ipsec_itf_delete_reply_t *rp;
+
+	msg_id = vac_get_msg_index(VL_API_IPSEC_ITF_DELETE_CRC);
+
+	clib_memset(&mp, 0, sizeof(mp));
+	mp._vl_msg_id = ntohs(msg_id);
+	mp.sw_if_index = htonl(sw_if_index);
+
+	err = NAAS_API_INVOKE(mp, rp);
+	naas_api_msg_free(rp);
+
+	naas_err_logf(LOG_INFO, err, "[VPP][API][ipsec_itf_delete] sw_if_index=%u", sw_if_index);
+
+	return err;
+}
 
 typedef struct naas_api_vl_api_ipsec_tunnel_protect_update {
 	vl_api_ipsec_tunnel_protect_update_t base;

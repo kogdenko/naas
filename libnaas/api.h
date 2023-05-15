@@ -9,6 +9,7 @@
 #include <vlibmemory/api.h>
 #include <vppinfra/error.h>
 #include <vpp-api/client/vppapiclient.h>
+#include <vpp/api/vpe.api_types.h>
 #include <vnet/interface.api_types.h>
 #include <vnet/ip/ip.api_enum.h>
 #include <vnet/ip/ip_types_api.h>
@@ -60,6 +61,8 @@ typedef int (naas_api_dump_handler_t)(void *user, void *user2, void *data, int l
 int naas_api_dump(void *mp, int mlen, char *details_msg_name, naas_api_dump_handler_t handler,
 		void *user0, void *user1);
 
+naas_err_t naas_api_show_version();
+
 struct naas_api_sw_interface {
 	uint32_t sw_if_index;
 	vl_api_if_status_flags_t flags;
@@ -98,7 +101,7 @@ naas_err_t naas_api_ipsec_spd_add_del(int is_add, uint32_t spd_id);
 
 naas_err_t naas_api_ipsec_itf_create(int instance, uint32_t *sw_if_index);
 
-naas_err_t naas_api_ipsec_itf_delete();
+naas_err_t naas_api_ipsec_itf_delete(uint32_t sw_if_index);
 
 naas_err_t naas_api_ipsec_spd_add_del(int is_add, uint32_t spd_id);
 

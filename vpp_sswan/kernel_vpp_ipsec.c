@@ -21,6 +21,8 @@
 #include <vnet/vnet.h>
 #include <collections/hashtable.h>
 #include <threading/mutex.h>
+#include <threading/thread.h>
+
 #include <processing/jobs/callback_job.h>
 #include <vpp-api/client/stat_client.h>
 
@@ -135,6 +137,8 @@ struct private_kernel_vpp_ipsec_t
    * Whether to install routes along policies
    */
   bool install_routes;
+
+  thread_t *keepalive;
 
   /**
    * Whether to install SAs with tunnel flag. Disabling this can be useful
@@ -391,7 +395,24 @@ calculate_priority (policy_priority_t policy_priority, traffic_selector_t *src,
  * (Un)-install a security policy database
  */
 
+static void
+sw_interface_details(void *user, struct naas_api_sw_interface *interface)
+{
+	uint32_t *sw_if_index;
 
+	sw_if_index = user;
+	*sw_if_index = interface->sw_if_index;
+}
+
+static uint32_t
+get_sw_if_index(const char *if_name)
+{
+	int sw_if_index;
+
+	sw_if_index = ~0;
+	naas_api_sw_interface_dump(sw_interface_details, &sw_if_index, if_name);
+	return sw_if_index;
+}
 
 static status_t
 manage_policy(private_kernel_vpp_ipsec_t *this, bool add, kernel_ipsec_policy_id_t *id,
@@ -439,7 +460,14 @@ manage_policy(private_kernel_vpp_ipsec_t *this, bool add, kernel_ipsec_policy_id
 		}
 
 	} else {
-		VAC_LOG("del policy: dir=%d", id->dir);
+		char if_name[32];
+		uint32_t sw_if_index;
+		snprintf(if_name, sizeof(if_name), "ipsec%d", reqid);
+		sw_if_index = get_sw_if_index(if_name);
+		VAC_LOG("del policy: dir=%d, sw_if_index=%u", id->dir, sw_if_index);
+		if (sw_if_index != ~0) {
+			naas_api_ipsec_itf_delete(sw_if_index);
+		}		
 	}
 
 	this->mutex->unlock (this->mutex);
@@ -1087,9 +1115,10 @@ METHOD (kernel_ipsec_t, enable_udp_decap, bool,
 
 METHOD (kernel_ipsec_t, destroy, void, private_kernel_vpp_ipsec_t *this)
 {
-  VAC_METHOD;
+  this->keepalive->cancel (this->keepalive);
   this->mutex->destroy (this->mutex);
   this->sas->destroy (this->sas);
+  this->in_sas->destroy (this->in_sas);
   this->spds->destroy (this->spds);
   this->routes->destroy (this->routes);
   if (this->sm)
@@ -1099,6 +1128,20 @@ METHOD (kernel_ipsec_t, destroy, void, private_kernel_vpp_ipsec_t *this)
       this->sm = NULL;
     }
   free (this);
+}
+
+static void *
+keepalive_fn (private_kernel_vpp_ipsec_t *this)
+{
+	vl_api_show_version_reply_t ver;
+
+	while (1) {
+		this->mutex->lock (this->mutex);
+		naas_api_show_version(&ver);
+		this->mutex->unlock (this->mutex);
+		sleep(2);
+	}
+	return NULL;
 }
 
 kernel_vpp_ipsec_t *
@@ -1145,6 +1188,9 @@ kernel_vpp_ipsec_create ()
                             TRUE, lib->ns),
         .sm = NULL,
     );
+
+  this->keepalive =  thread_create ((thread_main_t) keepalive_fn, this);
+
 
   if (!init_spi (this))
     {

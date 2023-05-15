@@ -161,7 +161,6 @@ def vpp_sswan(env, deps):
 		'vpp_sswan/kernel_vpp_plugin.c',
 		'vpp_sswan/kernel_vpp_shared.c',
 		'vpp_sswan/kernel_vpp_ipsec.c',
-#		'vpp_sswan/kernel_vpp_net.c',
 	]
 
 	ldflags = [

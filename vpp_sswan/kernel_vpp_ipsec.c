@@ -454,8 +454,8 @@ manage_policy(private_kernel_vpp_ipsec_t *this, bool add, kernel_ipsec_policy_id
 				in_sa_id, sa_id, reqid, id->dir, this->loop_sw_if_index);
 			naas_api_ipsec_itf_create(reqid, &sw_if_index);
 			naas_api_sw_interface_set_unnumbered(1, this->loop_sw_if_index, sw_if_index);
-			naas_api_sw_interface_set_flags(sw_if_index, IF_STATUS_API_FLAG_ADMIN_UP);
-			naas_api_ip_route_add_del(1, addr->sin_addr, prefixlen, sw_if_index);
+			//naas_api_sw_interface_set_flags(sw_if_index, IF_STATUS_API_FLAG_ADMIN_UP);
+			//naas_api_ip_route_add_del(1, addr->sin_addr, prefixlen, sw_if_index);
 			naas_api_ipsec_tunnel_protect_update(sw_if_index, in_sa_id, sa_id);
 		}
 
@@ -474,7 +474,7 @@ manage_policy(private_kernel_vpp_ipsec_t *this, bool add, kernel_ipsec_policy_id
 			VAC_LOG("del policy: dir=%d, sw_if_index=%u, subnet=%x",
 				id->dir, sw_if_index, addr->sin_addr.s_addr);
 			if (sw_if_index != ~0) {
-				naas_api_ip_route_add_del(0, addr->sin_addr, prefixlen, sw_if_index);
+				//naas_api_ip_route_add_del(0, addr->sin_addr, prefixlen, sw_if_index);
 				naas_api_ipsec_itf_delete(sw_if_index);
 			}
 		}

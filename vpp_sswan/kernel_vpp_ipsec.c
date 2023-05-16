@@ -460,14 +460,24 @@ manage_policy(private_kernel_vpp_ipsec_t *this, bool add, kernel_ipsec_policy_id
 		}
 
 	} else {
-		char if_name[32];
-		uint32_t sw_if_index;
-		snprintf(if_name, sizeof(if_name), "ipsec%d", reqid);
-		sw_if_index = get_sw_if_index(if_name);
-		VAC_LOG("del policy: dir=%d, sw_if_index=%u", id->dir, sw_if_index);
-		if (sw_if_index != ~0) {
-			naas_api_ipsec_itf_delete(sw_if_index);
-		}		
+		if (id->dir == POLICY_OUT) {
+			host_t *dst_net = NULL;
+			struct sockaddr_in *addr;
+			uint8_t prefixlen;
+			id->dst_ts->to_subnet(id->dst_ts, &dst_net, &prefixlen);
+			addr = (struct sockaddr_in *)dst_net->get_sockaddr(dst_net);
+
+			char if_name[32];
+			uint32_t sw_if_index;
+			snprintf(if_name, sizeof(if_name), "ipsec%d", reqid);
+			sw_if_index = get_sw_if_index(if_name);
+			VAC_LOG("del policy: dir=%d, sw_if_index=%u, subnet=%x",
+				id->dir, sw_if_index, addr->sin_addr.s_addr);
+			if (sw_if_index != ~0) {
+				naas_api_ip_route_add_del(0, addr->sin_addr, prefixlen, sw_if_index);
+				naas_api_ipsec_itf_delete(sw_if_index);
+			}
+		}
 	}
 
 	this->mutex->unlock (this->mutex);

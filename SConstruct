@@ -192,9 +192,18 @@ def build_deb(env):
 	DEBDESC = "MTS Naas Package"
 
 	libnl_path = "opt/libnl-227.27.0/lib/"
+
 	libnl = libnl_path + "libnl-3.so.200.27.0"
+	libnl_symlink = libnl_path + "libnl-3.so.200"
+
 	libnl_route = libnl_path + "libnl-route-3.so.200.27.0"
+	libnl_route_symlink = libnl_path + "libnl-route-3.so.200"
+
 	libnl_cli = libnl_path + "libnl-cli-3.so.200.27.0"
+	libnl_cli_symlink = libnl_path + "libnl-cli-3.so.200"
+
+	libnl_nf = libnl_path + "libnl-nf-3.so.200.27.0"
+	libnl_nf_symlink = libnl_path + "libnl-nf-3.so.200"
 
 	vpp_lcpd = "naas-vpp-lcpd"
 
@@ -202,8 +211,13 @@ def build_deb(env):
 		("etc/ld.so.conf.d/ipsec.conf", "#libnaas/ld-ipsec.conf"),
 		("usr/local/lib/" + libnaas_name, "#bin/" + libnaas_name),
 		(libnl, "/" + libnl),
+		(libnl_symlink, "/" + libnl_symlink),
 		(libnl_route, "/" + libnl_route),
+		(libnl_route_symlink, "/" + libnl_route_symlink),
 		(libnl_cli, "/" + libnl_cli),
+		(libnl_cli_symlink, "/" + libnl_cli_symlink),
+		(libnl_nf, "/" + libnl_nf),
+		(libnl_nf_symlink, "/" + libnl_nf_symlink),
 		("usr/local/bin/" + vpp_lcpd, "#bin/" + vpp_lcpd),
 		("etc/naas/kernel-vpp.conf", "#vpp_sswan/kernel-vpp.conf"),
 		("etc/naas/libstrongswan-kernel-vpp.so", "#bin/libstrongswan-kernel-vpp.so"),

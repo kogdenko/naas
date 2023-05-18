@@ -1,0 +1,53 @@
+From cd01ce1d48a380e2b1ec33d0687a5ddcc6fe94ac Mon Sep 17 00:00:00 2001
+From: Simon Zolin <steelum@gmail.com>
+Date: Thu, 27 Apr 2023 11:18:23 +0300
+Subject: [PATCH] fib: don't leave default 'dpo-drop' rule after 'sr steer'
+
+Steps to reproduce:
+
+1. Exec these commands on a new IP table:
+
+        sr policy add bsid  2999:1:1:1:: next 2bbb:1:1:1:: encap
+        sr steer l3 0.0.0.0/0  via bsid 2999:1:1:1:: fib-table 77
+
+2. Observe that default 'dpo-drop' rule isn't removed automatically:
+
+0.0.0.0/0
+  unicast-ip4-chain
+  [@0]: dpo-load-balance: [proto:ip4 index:9 buckets:2 uRPF:30 to:[0:0]]
+    [0] [@14]: dpo-load-balance: [proto:ip4 index:25 buckets:1 uRPF:-1 to:[0:0]]
+          [0] [@13]: SR: Segment List index:[0]
+        Segments:< 2bbb:1:1:1:: > - Weight: 1
+    [1] [@0]: dpo-drop ip4
+
+This is because:
+
+1. fib_entry_src_api_add() creates and sets `src->fes_pl` index.
+2. Then, fib_entry_src_api_path_add() calls
+    fib_path_list_copy_and_path_add() which preserves default drop rule.
+
+This patch forces fib_entry_src_api_path_add() to call
+ fib_path_list_create() instead, thus removing default drop rule.
+
+Type: fix
+Signed-off-by: Simon Zolin <steelum@gmail.com>
+---
+ src/vnet/fib/fib_entry_src_api.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/vnet/fib/fib_entry_src_api.c b/src/vnet/fib/fib_entry_src_api.c
+index 69102a1..42c570b 100644
+--- a/src/vnet/fib/fib_entry_src_api.c
++++ b/src/vnet/fib/fib_entry_src_api.c
+@@ -134,7 +134,7 @@ fib_entry_src_api_add (fib_entry_src_t *src,
+ 		       dpo_proto_t proto,
+ 		       const dpo_id_t *dpo)
+ {
+-    if (FIB_ENTRY_FLAG_NONE != flags)
++    if (flags & (FIB_ENTRY_FLAG_DROP | FIB_ENTRY_FLAG_EXCLUSIVE | FIB_ENTRY_FLAG_LOCAL))
+     {
+ 	src->fes_pl = fib_path_list_create_special(
+ 	                  proto,
+-- 
+2.40.0
+

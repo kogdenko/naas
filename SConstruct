@@ -159,8 +159,6 @@ def vpp_sswan(env, deps):
 
 	srcs = [
 		'vpp_sswan/kernel_vpp_plugin.c',
-		'vpp_sswan/kernel_vpp_shared.c',
-		'vpp_sswan/kernel_vpp_ipsec.c',
 	]
 
 	ldflags = [

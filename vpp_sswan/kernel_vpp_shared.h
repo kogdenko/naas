@@ -84,11 +84,11 @@ vac_t *vac_create (char *name);
 
 void net_update_thread_fn ();
 
-#if 0
+#if 1
 #define VAC_LOG(...) do { \
-	printf("\n--------- %s:%u ", __FILE__, __LINE__); \
+	printf("[VAC][%s:%u] ", __FILE__, __LINE__); \
 	printf(__VA_ARGS__); \
-	printf(" -----------\n"); \
+	printf("\n"); \
 } while (0) 
 #else
 #define VAC_LOG(...)

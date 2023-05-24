@@ -182,18 +182,19 @@ naas_api_invoke(void *m, int mlen, void **r, int rlen)
 	return 0;
 }
 
-int
+naas_err_t
 naas_api_dump(void *mp, int mlen, char *details_msg_name, naas_api_dump_handler_t handler,
 		void *user0, void *user1)
 {
 	int rc, rlen, details_msg_id, pong_msg_id, data_msg_id;
 	char *data;
+	naas_err_t err;
 
 	details_msg_id = vac_get_msg_index(details_msg_name); 
 
 	rc = naas_vac_write(mp, mlen);
 	if (rc < 0) {
-		return rc;
+		goto out;
 	}
 
 	do {
@@ -205,7 +206,7 @@ naas_api_dump(void *mp, int mlen, char *details_msg_name, naas_api_dump_handler_
 	do {
 		rc = naas_vac_read(&data, 5);
 		if (rc < 0) {
-			return rc;
+			goto out;
 		}
 		rlen = rc;
 		rc = 0;
@@ -217,7 +218,7 @@ naas_api_dump(void *mp, int mlen, char *details_msg_name, naas_api_dump_handler_
 		} else if (data_msg_id == details_msg_id) {
 			rc = (handler)(user0, user1, data, rlen);
 		} else {
-			naas_logf(LOG_ERR, 0, "%s: Unexpected message: %d",
+			naas_logf(LOG_ERR, 0, "[VPP][API][%s] Unexpected message: %d",
 					details_msg_name, data_msg_id);
 		}
 
@@ -225,7 +226,10 @@ naas_api_dump(void *mp, int mlen, char *details_msg_name, naas_api_dump_handler_
 
 	} while (data_msg_id != pong_msg_id && rc == 0);
 
-	return rc;
+out:
+	err.type = NAAS_ERR_ERRNO;
+	err.num = -rc;
+	return err;
 }
 
 naas_err_t
@@ -296,7 +300,7 @@ naas_err_t
 naas_api_sw_interface_dump(naas_api_sw_interface_dump_f handler, void *user,
 		const char *name_filter)
 {
-	int rc, name_filter_len, msg_id;
+	int name_filter_len, msg_id;
 	naas_err_t err;
 	naas_api_vl_api_sw_interface_dump_t mp;
 
@@ -315,11 +319,8 @@ naas_api_sw_interface_dump(naas_api_sw_interface_dump_f handler, void *user,
   	mp.base.name_filter.length = htonl(name_filter_len);
 	memcpy(mp.name_filter, name_filter, name_filter_len);
 
-	rc = naas_api_dump(&mp, sizeof(mp), VL_API_SW_INTERFACE_DETAILS_CRC,
+	err = naas_api_dump(&mp, sizeof(mp), VL_API_SW_INTERFACE_DETAILS_CRC,
 			naas_api_sw_interface_details, handler, user);
-
-	err.num = -rc;
-	err.type = NAAS_ERR_ERRNO;
 
 	return err;
 }
@@ -741,6 +742,7 @@ naas_api_ipsec_spd_add_del(int is_add, uint32_t spd_id)
 	return err;
 }
 
+// ipsec itf create instance 10
 naas_err_t
 naas_api_ipsec_itf_create(int instance, uint32_t *p_sw_if_index)
 {
@@ -829,6 +831,53 @@ naas_api_ipsec_tunnel_protect_update(uint32_t sw_if_index, uint32_t sa_in, uint3
 	return err;
 }
 
+typedef struct naas_api_vl_api_ipsec_tunnel_protect_deatils {
+	vl_api_ipsec_tunnel_protect_details_t base;
+	uint32_t sa_in;
+} naas_api_vl_api_ipsec_tunnel_protect_details_t;
+
+static int
+naas_api_ipsec_tunnel_protect_details(void *user0, void *user, void *data, int len)
+{
+	uint32_t *sa_in, *sa_out;
+	naas_api_vl_api_ipsec_tunnel_protect_details_t *details;
+
+	sa_in = user0;
+	sa_out = user;
+
+	if (len != sizeof(*details)) {
+		return -EINVAL;
+	}
+	details = data;
+	*sa_out = ntohl(details->base.tun.sa_out);
+	*sa_in = ntohl(details->sa_in);
+
+	naas_logf(LOG_INFO,
+"[VPP][API][ipsec_tunnel_protect_dump] sw_if_index=%u, sa_in=%u, sa_out=%u",
+			ntohl(details->base.tun.sw_if_index), *sa_in, *sa_out);
+
+	return 0;
+}
+
+naas_err_t
+naas_api_ipsec_tunnel_protect_dump(uint32_t sw_if_index, uint32_t *sa_in, uint32_t *sa_out)
+{
+	int msg_id;
+	naas_err_t err;
+	vl_api_ipsec_tunnel_protect_dump_t mp;
+
+	msg_id = vac_get_msg_index(VL_API_IPSEC_TUNNEL_PROTECT_DUMP_CRC);
+
+	clib_memset(&mp, 0, sizeof(mp));
+	mp._vl_msg_id = ntohs(msg_id);
+	mp.sw_if_index = htonl(sw_if_index);
+
+	err = naas_api_dump(&mp, sizeof(mp), VL_API_IPSEC_TUNNEL_PROTECT_DETAILS_CRC,
+			naas_api_ipsec_tunnel_protect_details, sa_in, sa_out);
+
+	return err;
+}
+
 // VPP ctl:
 // show ipsec sa
 static int
@@ -850,14 +899,14 @@ naas_api_ipsec_sa_details(void *user0, void *user, void *data, int len)
 		(*handler)(user, sad_id, spi);
 	}
 
-	naas_logf(LOG_DEBUG, 0, "[VPP][API][ipsec_sa_dump] sad_id=%u, spi=%x", sad_id, spi);
+	naas_logf(LOG_DEBUG, "[VPP]API][ipsec_sa_dump] sad_id=%u, spi=%x", sad_id, spi);
 	return 0;
 }
 
 naas_err_t
 naas_api_ipsec_sa_dump(naas_api_ipsec_sa_dump_f handler, void *user)
 {
-	int rc, msg_id;
+	int msg_id;
 	naas_err_t err;
 	vl_api_ipsec_sa_dump_t mp;
 
@@ -866,11 +915,9 @@ naas_api_ipsec_sa_dump(naas_api_ipsec_sa_dump_f handler, void *user)
 	clib_memset(&mp, 0, sizeof(mp));
 	mp._vl_msg_id = ntohs(msg_id);
 
-	rc = naas_api_dump(&mp, sizeof(mp), VL_API_IPSEC_SA_DETAILS_CRC,
+	err = naas_api_dump(&mp, sizeof(mp), VL_API_IPSEC_SA_DETAILS_CRC,
 			naas_api_ipsec_sa_details, handler, user);
 
-	err.type = NAAS_ERR_ERRNO;
-	err.num = -rc;
 	return err;
 }
 

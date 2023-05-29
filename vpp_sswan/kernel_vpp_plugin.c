@@ -519,76 +519,89 @@ METHOD(kernel_ipsec_t, add_sa, status_t, kernel_vpp_ipsec_t *this,
 	    encryption_algorithm_names, data->enc_alg);
       goto error;
     }
-  mp.entry.crypto_algorithm = htonl (ca);
-  mp.entry.crypto_key.length = key_len < 128 ? key_len : 128;
-  memcpy (mp.entry.crypto_key.data, data->enc_key.ptr,
-	  mp.entry.crypto_key.length);
+	mp.entry.crypto_algorithm = htonl(ca);
+	mp.entry.crypto_key.length = key_len < 128 ? key_len : 128;
+	memcpy (mp.entry.crypto_key.data, data->enc_key.ptr, mp.entry.crypto_key.length);
 
-  // copy salt for AEAD algorithms
-  if ((data->enc_alg == ENCR_AES_CTR) ||
-      (data->enc_alg == ENCR_AES_GCM_ICV8) ||
-      (data->enc_alg == ENCR_AES_GCM_ICV12) ||
-      (data->enc_alg == ENCR_AES_GCM_ICV16))
-    {
-      memcpy (&mp.entry.salt, data->enc_key.ptr + mp.entry.crypto_key.length, 4);
-    }
+	// copy salt for AEAD algorithms
+	if ((data->enc_alg == ENCR_AES_CTR) ||
+			(data->enc_alg == ENCR_AES_GCM_ICV8) ||
+			(data->enc_alg == ENCR_AES_GCM_ICV12) ||
+			(data->enc_alg == ENCR_AES_GCM_ICV16)) {
+		memcpy (&mp.entry.salt, data->enc_key.ptr + mp.entry.crypto_key.length, 4);
+	}
 
-  switch (data->int_alg)
-    {
-    case AUTH_UNDEFINED:
-      ia = IPSEC_API_INTEG_ALG_NONE;
-      break;
-    case AUTH_HMAC_MD5_96:
-      ia = IPSEC_API_INTEG_ALG_MD5_96;
-      break;
-    case AUTH_HMAC_SHA1_96:
-      ia = IPSEC_API_INTEG_ALG_SHA1_96;
-      break;
-    case AUTH_HMAC_SHA2_256_96:
-      ia = IPSEC_API_INTEG_ALG_SHA_256_96;
-      break;
-    case AUTH_HMAC_SHA2_256_128:
-      ia = IPSEC_API_INTEG_ALG_SHA_256_128;
-      break;
-    case AUTH_HMAC_SHA2_384_192:
-      ia = IPSEC_API_INTEG_ALG_SHA_384_192;
-      break;
-    case AUTH_HMAC_SHA2_512_256:
-      ia = IPSEC_API_INTEG_ALG_SHA_512_256;
-      break;
-    default:
-      DBG1 (DBG_KNL, "algorithm %N not supported by VPP!",
-	    integrity_algorithm_names, data->int_alg);
-      goto error;
-      break;
-    }
-  mp.entry.integrity_algorithm = htonl (ia);
-  mp.entry.integrity_key.length =
-    data->int_key.len < 128 ? data->int_key.len : 128;
-  memcpy (mp.entry.integrity_key.data, data->int_key.ptr,
-	  mp.entry.integrity_key.length);
+	switch (data->int_alg) {
+		case AUTH_UNDEFINED:
+		ia = IPSEC_API_INTEG_ALG_NONE;
+		break;
+	case AUTH_HMAC_MD5_96:
+		ia = IPSEC_API_INTEG_ALG_MD5_96;
+		break;
+	case AUTH_HMAC_SHA1_96:
+		ia = IPSEC_API_INTEG_ALG_SHA1_96;
+		break;
+	case AUTH_HMAC_SHA2_256_96:
+		ia = IPSEC_API_INTEG_ALG_SHA_256_96;
+		break;
+	case AUTH_HMAC_SHA2_256_128:
+		ia = IPSEC_API_INTEG_ALG_SHA_256_128;
+		break;
+	case AUTH_HMAC_SHA2_384_192:
+		ia = IPSEC_API_INTEG_ALG_SHA_384_192;
+		break;
+	case AUTH_HMAC_SHA2_512_256:
+		ia = IPSEC_API_INTEG_ALG_SHA_512_256;
+		break;
+	default:
+		DBG1 (DBG_KNL, "algorithm %N not supported by VPP!",
+				integrity_algorithm_names, data->int_alg);
+		goto error;
+		break;
+	}
 
-  int flags = IPSEC_API_SAD_FLAG_NONE;
-  if (data->inbound)
-    flags |= IPSEC_API_SAD_FLAG_IS_INBOUND;
-  /* like the kernel-netlink plugin, anti-replay can be disabled with zero
-   * replay_window, but window size cannot be customized for vpp */
-  if (data->replay_window)
-    flags |= IPSEC_API_SAD_FLAG_USE_ANTI_REPLAY;
-  if (data->esn)
-    flags |= IPSEC_API_SAD_FLAG_USE_ESN;
-  if (this->use_tunnel_mode_sa && data->mode == MODE_TUNNEL)
-    {
-      if (id->src->get_family (id->src) == AF_INET6)
-	flags |= IPSEC_API_SAD_FLAG_IS_TUNNEL_V6;
-      else
-	flags |= IPSEC_API_SAD_FLAG_IS_TUNNEL;
-    }
-  if (data->encap)
-    {
-      DBG1 (DBG_KNL, "UDP encap!!!!!!!!!!!!!!!!!!!!");
-      flags |= IPSEC_API_SAD_FLAG_UDP_ENCAP;
-    }
+	mp.entry.integrity_algorithm = htonl (ia);
+	mp.entry.integrity_key.length = data->int_key.len < 128 ? data->int_key.len : 128;
+	memcpy(mp.entry.integrity_key.data,
+			data->int_key.ptr, mp.entry.integrity_key.length);
+
+	int flags = IPSEC_API_SAD_FLAG_NONE;
+	if (data->inbound)
+		flags |= IPSEC_API_SAD_FLAG_IS_INBOUND;
+	// like the kernel-netlink plugin, anti-replay can be disabled with zero
+	// replay_window, but window size cannot be customized for vpp
+	if (data->replay_window)
+		flags |= IPSEC_API_SAD_FLAG_USE_ANTI_REPLAY;
+	if (data->esn)
+		flags |= IPSEC_API_SAD_FLAG_USE_ESN;
+	if (this->use_tunnel_mode_sa && data->mode == MODE_TUNNEL) {
+		if (id->src->get_family (id->src) == AF_INET6)
+			flags |= IPSEC_API_SAD_FLAG_IS_TUNNEL_V6;
+		else
+			flags |= IPSEC_API_SAD_FLAG_IS_TUNNEL;
+    	}
+	if (data->encap) {
+		DBG1 (DBG_KNL, "UDP encap!!!!!!!!!!!!!!!!!!!!");
+		flags |= IPSEC_API_SAD_FLAG_UDP_ENCAP;
+		if (id->src->get_family(id->src) != AF_INET ||
+				id->dst->get_family(id->dst) != AF_INET) {
+			DBG1 (DBG_KNL, "UDP encap not IPv4 !!!!!!!!!!!!!!!!!!!!");
+		} else {
+			struct sockaddr_in *src_sockaddr;
+			struct sockaddr_in *dst_sockaddr;
+
+			src_sockaddr = (struct sockaddr_in *)id->src->get_sockaddr(id->src);
+			dst_sockaddr = (struct sockaddr_in *)id->dst->get_sockaddr(id->dst);
+
+//			dst_sockaddr = 
+			printf("src_port=%u; dst_port=%u\n",
+					ntohs(src_sockaddr->sin_port), ntohs(dst_sockaddr->sin_port));
+
+			mp.entry.udp_src_port = src_sockaddr->sin_port;
+			mp.entry.udp_dst_port = dst_sockaddr->sin_port;
+		}
+
+	}
   mp.entry.flags = htonl (flags);
 
   bool is_ipv6 = false;
@@ -941,8 +954,9 @@ METHOD (kernel_ipsec_t, enable_udp_decap, bool,
 		kernel_vpp_ipsec_t *this, int fd, int family, u_int16_t port)
 {
 	VAC_METHOD;
-	DBG1(DBG_KNL, "enable_udp_decap not supported!!!!!!!!!!!!!!!!!!!!!!!!!");
-	return FALSE;
+//	DBG1(DBG_KNL, "enable_udp_decap not supported!!!!!!!!!!!!!!!!!!!!!!!!!");
+//	return FALSE;
+	return TRUE;
 }
 
 METHOD(kernel_ipsec_t, ipsec_destroy, void, kernel_vpp_ipsec_t *this)

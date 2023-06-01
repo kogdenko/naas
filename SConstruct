@@ -186,7 +186,8 @@ def build_deb(env):
 	DEBVERSION = git_version
 	DEBMAINT = "Konstantin Kogdenko <k.kogdenko@gmail.com>"
 	DEBARCH = "amd64"
-	DEBDEPENDS = "vpp, vpp-dev, libvppinfra, libvppinfra-dev, libstrongswan, strongswan-swanctl"
+	#DEBDEPENDS = "vpp, vpp-dev, libvppinfra, libvppinfra-dev, libstrongswan, strongswan-swanctl"
+	DEBDEPENDS = ""
 	DEBDESC = "MTS Naas Package"
 
 	libnl_path = "opt/libnl-227.27.0/lib/"

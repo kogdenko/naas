@@ -253,7 +253,7 @@ naas_api_show_version(vl_api_show_version_reply_t *ver)
 	}
 	naas_api_msg_free(rp);
 
-	naas_err_logf(LOG_INFO, err,
+	naas_err_logf(LOG_DEBUG, err,
 "[VPP][API][show_version] program=%s, version=%s, build_date=%s, build_directory=%s",
 		ver->program, ver->version, ver->build_date, ver->build_directory);
 

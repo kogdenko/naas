@@ -1,20 +1,3 @@
-/*
- * Copyright (c) 2022 Intel and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
-#include <utils/debug.h>
-#include <vlibapi/api.h>
 #include <vlibmemory/api.h>
 
 #define vl_typedefs
@@ -27,71 +10,33 @@
 #undef vl_typedefs
 #undef vl_endianfun
 
-#include "kernel_vpp_plugin.h"
-#include "kernel_vpp_shared.h"
-
-#include <libnaas/api.h>
+#include <vpp-api/client/stat_client.h>
 
 #include <daemon.h>
-
-//=====================================================================
-
-#include <vnet/ipsec/ipsec.h>
-#include <vnet/vnet.h>
+#include <processing/jobs/callback_job.h>
 #include <collections/hashtable.h>
 #include <threading/mutex.h>
 #include <threading/thread.h>
 
-#include <processing/jobs/callback_job.h>
-#include <vpp-api/client/stat_client.h>
-
-#define vl_typedefs
-#define vl_endianfun
-/* Include the (first) vlib-api API definition layer */
-#include <vlibmemory/vl_memory_api_h.h>
-/* Include the current layer (third) vpp API definition layer */
-#include <vpp/api/vpe_types.api.h>
-#include <vpp/api/vpe.api.h>
-
-#include <vnet/ip-neighbor/ip_neighbor.api_enum.h>
-#include <vnet/ip-neighbor/ip_neighbor.api_types.h>
-#include <vnet/ipsec/ipsec.api_enum.h>
-#include <vnet/ipsec/ipsec.api_types.h>
-#include <vnet/interface.api_enum.h>
-#include <vnet/interface.api_types.h>
-#undef vl_typedefs
-#undef vl_endianfun
-
-#include "kernel_vpp_shared.h"
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <sys/ioctl.h>
-#include <net/if.h>
-#include <net/route.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/types.h>
-#include <net/if_arp.h>
-#include <sys/stat.h>
-#include <dirent.h>
-
 #include <libnaas/api.h>
 
-
-u32 natt_port;
-
-/**
- * One and only instance of the daemon.
- */
-//daemon_t *charon;
-
+#if 1
+#define MYDBG(...) do { \
+	printf("[VAC][%s:%u] ", __FILE__, __LINE__); \
+	printf(__VA_ARGS__); \
+	printf("\n"); \
+} while (0) 
+#else
+#define MYDBG(...)
+#endif
 
 struct kernel_vpp_ipsec;
+
+typedef struct kernel_vpp_plugin_t kernel_vpp_plugin_t;
+
+struct kernel_vpp_plugin_t {
+	plugin_t plugin;
+};
 
 typedef struct kernel_vpp_listener {
 	listener_t public;
@@ -121,78 +66,68 @@ typedef struct kernel_vpp_ipsec {
 	stat_client_main_t *sm;
 } kernel_vpp_ipsec_t;
 
-typedef struct kernel_vpp_sa {
+typedef struct kernel_vpp_child_sa {
 	uint32_t id;
 	uint32_t stat_index;
 	uint32_t peer_spi;
 	uint32_t unique_id;
-} kernel_vpp_sa_t;
+} kernel_vpp_child_sa_t;
 
-/**
- * Hash function for IPsec SA
- */
+typedef struct private_kernel_vpp_plugin {
+  	kernel_vpp_plugin_t public;
+} private_kernel_vpp_plugin_t;
+
 static u_int
 sa_hash (kernel_ipsec_sa_id_t *sa)
 {
-  return chunk_hash_inc (
-    sa->src->get_address (sa->src),
-    chunk_hash_inc (
-      sa->dst->get_address (sa->dst),
-      chunk_hash_inc (chunk_from_thing (sa->spi),
-		      chunk_hash (chunk_from_thing (sa->proto)))));
+	return chunk_hash_inc(
+			sa->src->get_address (sa->src),
+			chunk_hash_inc(
+				sa->dst->get_address (sa->dst),
+				chunk_hash_inc(chunk_from_thing (sa->spi),
+					chunk_hash(chunk_from_thing(sa->proto)))));
 }
 
-/**
- * Equality function for IPsec SA
- */
 static bool
 sa_equals (kernel_ipsec_sa_id_t *sa, kernel_ipsec_sa_id_t *other_sa)
 {
-  return sa->src->ip_equals (sa->src, other_sa->src) &&
-	 sa->dst->ip_equals (sa->dst, other_sa->dst) &&
-	 sa->spi == other_sa->spi && sa->proto == other_sa->proto;
+	return sa->src->ip_equals (sa->src, other_sa->src) &&
+			sa->dst->ip_equals (sa->dst, other_sa->dst) &&
+			sa->spi == other_sa->spi && sa->proto == other_sa->proto;
 }
 
-/**
- * Map an integer x with a one-to-one function using quadratic residues
- */
 static u_int
 permute (u_int x, u_int p)
 {
-  u_int qr;
+	u_int qr;
 
-  x = x % p;
-  qr = ((uint64_t) x * x) % p;
-  if (x <= p / 2)
-    {
-      return qr;
-    }
-  return p - qr;
+	x = x % p;
+	qr = ((uint64_t) x * x) % p;
+	if (x <= p / 2) {
+		return qr;
+	}
+	return p - qr;
 }
 
-/**
- * Initialize seeds for SPI generation
- */
+// Initialize seeds for SPI generation
 static bool
-init_spi (kernel_vpp_ipsec_t *this)
+init_spi(kernel_vpp_ipsec_t *this)
 {
-  bool ok = TRUE;
-  rng_t *rng;
+	bool ok;
+	rng_t *rng;
 
-  rng = lib->crypto->create_rng (lib->crypto, RNG_STRONG);
-  if (!rng)
-    {
-      return FALSE;
-    }
-  ok =
-    rng->get_bytes (rng, sizeof (this->nextspi), (uint8_t *) &this->nextspi);
-  if (ok)
-    {
-      ok =
-	rng->get_bytes (rng, sizeof (this->mixspi), (uint8_t *) &this->mixspi);
-    }
-  rng->destroy (rng);
-  return ok;
+	ok = TRUE;
+
+	rng = lib->crypto->create_rng (lib->crypto, RNG_STRONG);
+	if (!rng) {
+		return FALSE;
+	}
+	ok = rng->get_bytes (rng, sizeof (this->nextspi), (uint8_t *) &this->nextspi);
+	if (ok) {
+		ok = rng->get_bytes (rng, sizeof (this->mixspi), (uint8_t *) &this->mixspi);
+	}
+	rng->destroy (rng);
+	return ok;
 }
 
 static void
@@ -238,64 +173,46 @@ get_or_create_ipsec(kernel_vpp_ipsec_t *this, uint32_t unique_id)
 }
 
 METHOD (kernel_ipsec_t, ipsec_get_features, kernel_feature_t,
-	kernel_vpp_ipsec_t *this)
+		kernel_vpp_ipsec_t *this)
 {
-  VAC_METHOD;
-  return KERNEL_ESP_V3_TFC;
+	return KERNEL_ESP_V3_TFC;
 }
 
 METHOD (kernel_ipsec_t, get_spi, status_t, kernel_vpp_ipsec_t *this,
-	host_t *src, host_t *dst, uint8_t protocol, uint32_t *spi)
+		host_t *src, host_t *dst, uint8_t protocol, uint32_t *spi)
 {
-  static const u_int p = 268435399, offset = 0xc0000000;
+	static const u_int p = 268435399;
+	static const u_int offset = 0xc0000000;
 
-  VAC_METHOD;
-  *spi = htonl (offset + permute (ref_get (&this->nextspi) ^ this->mixspi, p));
-  return SUCCESS;
+	*spi = htonl (offset + permute (ref_get (&this->nextspi) ^ this->mixspi, p));
+	return SUCCESS;
 }
 
 METHOD (kernel_ipsec_t, get_cpi, status_t, kernel_vpp_ipsec_t *this,
-	host_t *src, host_t *dst, uint16_t *cpi)
+		host_t *src, host_t *dst, uint16_t *cpi)
 {
-  VAC_METHOD;
-  DBG1 (DBG_KNL, "get_cpi is not supported!!!!!!!!!!!!!!!!!!!!!!!!");
-  return NOT_SUPPORTED;
+	DBG1(DBG_KNL, "get_cpi is not supported!!!!!!!!!!!!!!!!!!!!!!!!");
+	return NOT_SUPPORTED;
 }
 
-/**
- * Helper struct for expiration events
- */
-typedef struct
-{
-
-  kernel_vpp_ipsec_t *manager;
-
-  kernel_ipsec_sa_id_t *sa_id;
-
-  /**
-   * 0 if this is a hard expire, otherwise the offset in s (soft->hard)
-   */
-  uint32_t hard_offset;
-
+typedef struct {
+	kernel_vpp_ipsec_t *manager;
+	kernel_ipsec_sa_id_t *sa_id;
+	// 0 if this is a hard expire, otherwise the offset in s (soft->hard)
+	uint32_t hard_offset;
 } vpp_sa_expired_t;
 
-/**
- * Clean up expire data
- */
 static void
 expire_data_destroy (vpp_sa_expired_t *data)
 {
-  free (data);
+	free(data);
 }
 
-/**
- * Callback for expiration events
- */
 static job_requeue_t
 sa_expired(vpp_sa_expired_t *expired)
 {
 	kernel_vpp_ipsec_t *this = expired->manager;
-	kernel_vpp_sa_t *sa;
+	kernel_vpp_child_sa_t *sa;
 	kernel_ipsec_sa_id_t *id;
 
 	this = expired->manager;
@@ -324,7 +241,7 @@ sa_expired(vpp_sa_expired_t *expired)
 // Schedule a job to handle IPsec SA expiration
 static void
 schedule_expiration(kernel_vpp_ipsec_t *this, lifetime_cfg_t *lifetime,
-	kernel_ipsec_sa_id_t *entry2)
+		kernel_ipsec_sa_id_t *entry2)
 {
 	vpp_sa_expired_t *expired;
 	callback_job_t *job;
@@ -363,24 +280,10 @@ schedule_expiration(kernel_vpp_ipsec_t *this, lifetime_cfg_t *lifetime,
 	lib->scheduler->schedule_job (lib->scheduler, (job_t *) job, timeout);
 }
 
-// enc_key
-// enc_alg
-// 
-// int_key
-// int_alg
-//
-// inbound  
-// replay_window
-// esn
-// encap
-// lifetime
-
-//kernel_ipsec_update_sa_t
-
-static kernel_vpp_sa_t *
+static kernel_vpp_child_sa_t *
 kernel_vpp_sa_create(kernel_vpp_ipsec_t *this, kernel_ipsec_sa_id_t *id)
 {
-	kernel_vpp_sa_t *sa;
+	kernel_vpp_child_sa_t *sa;
 	kernel_ipsec_sa_id_t *key;
 
 	INIT(key,
@@ -412,113 +315,95 @@ METHOD(kernel_ipsec_t, add_sa, status_t, kernel_vpp_ipsec_t *this,
 	vl_api_ipsec_sad_entry_add_del_reply_t *rmp;
 	uint8_t ca, ia;
 	uint32_t sad_id, sw_if_index, stat_index;
-	status_t rv;
 	chunk_t src, dst;
 	kernel_ipsec_sa_id_t key, peer_key;
-	kernel_vpp_sa_t *sa, *peer_sa, *i_sa, *o_sa;
+	kernel_vpp_child_sa_t *sa, *peer_sa, *i_sa, *o_sa;
 	int key_len;
 
-	VAC_METHOD;
-
 	ca = ia = 0;
-	rv = FAILED;
 	key_len = data->enc_key.len;
 	sad_id = ref_get(&this->next_sad_id); 
 
+	if ((data->enc_alg == ENCR_AES_CTR) || (data->enc_alg == ENCR_AES_GCM_ICV8) ||
+		(data->enc_alg == ENCR_AES_GCM_ICV12) || (data->enc_alg == ENCR_AES_GCM_ICV16)) {
+		// See how enc_size is calculated at keymat_v2.derive_child_keys
+		static const int SALT_SIZE = 4; 
+		key_len = key_len - SALT_SIZE;
+	}
+	memset(&mp, 0, sizeof (mp));
+	u16 msg_id =  vl_msg_api_get_msg_index ((u8 *) "ipsec_sad_entry_add_del_ab64b5c6");
+	mp._vl_msg_id = htons (msg_id);
+	mp.is_add = 1;
+	mp.entry.sad_id = htonl (sad_id);
+	mp.entry.spi = id->spi;
+	mp.entry.protocol = id->proto == IPPROTO_ESP ? htonl (IPSEC_API_PROTO_ESP) :
+			htonl (IPSEC_API_PROTO_AH);
 
-  if ((data->enc_alg == ENCR_AES_CTR) ||
-      (data->enc_alg == ENCR_AES_GCM_ICV8) ||
-      (data->enc_alg == ENCR_AES_GCM_ICV12) ||
-      (data->enc_alg == ENCR_AES_GCM_ICV16))
-    {
-      // See how enc_size is calculated at keymat_v2.derive_child_keys
-      static const int SALT_SIZE = 4; 
-      key_len = key_len - SALT_SIZE;
-    }
-  natt_port = lib->settings->get_int (
-    lib->settings, "%s.plugins.socket-default.natt", IKEV2_NATT_PORT, lib->ns);
-  memset (&mp, 0, sizeof (mp));
-  u16 msg_id =
-    vl_msg_api_get_msg_index ((u8 *) "ipsec_sad_entry_add_del_ab64b5c6");
-  mp._vl_msg_id = htons (msg_id);
-  mp.is_add = 1;
-  mp.entry.sad_id = htonl (sad_id);
-  mp.entry.spi = id->spi;
-  mp.entry.protocol = id->proto == IPPROTO_ESP ? htonl (IPSEC_API_PROTO_ESP) :
-							htonl (IPSEC_API_PROTO_AH);
-
-  switch (data->enc_alg)
-    {
-    case ENCR_NULL:
-      ca = IPSEC_API_CRYPTO_ALG_NONE;
-      break;
-    case ENCR_AES_CBC:
-      switch (key_len * 8)
-	{
-	case 128:
-	  ca = IPSEC_API_CRYPTO_ALG_AES_CBC_128;
-	  break;
-	case 192:
-	  ca = IPSEC_API_CRYPTO_ALG_AES_CBC_192;
-	  break;
-	case 256:
-	  ca = IPSEC_API_CRYPTO_ALG_AES_CBC_256;
-	  break;
+	switch (data->enc_alg) {
+	case ENCR_NULL:
+		ca = IPSEC_API_CRYPTO_ALG_NONE;
+		break;
+	case ENCR_AES_CBC:
+		switch (key_len * 8) {
+		case 128:
+			ca = IPSEC_API_CRYPTO_ALG_AES_CBC_128;
+			break;
+		case 192:
+			ca = IPSEC_API_CRYPTO_ALG_AES_CBC_192;
+			break;
+		case 256:
+			ca = IPSEC_API_CRYPTO_ALG_AES_CBC_256;
+			break;
+		default:
+			DBG1(DBG_KNL, "Key length %d is not supported by VPP!", key_len * 8);
+			return FAILED;
+		}
+		break;
+	case ENCR_AES_CTR:
+		switch (key_len * 8) {
+		case 128:
+			ca = IPSEC_API_CRYPTO_ALG_AES_CTR_128;
+			break;
+		case 192:
+			ca = IPSEC_API_CRYPTO_ALG_AES_CTR_192;
+			break;
+		case 256:
+			ca = IPSEC_API_CRYPTO_ALG_AES_CTR_256;
+			break;
+		default:
+			DBG1(DBG_KNL, "Key length %d is not supported by VPP!", key_len * 8);
+			return FAILED;
+		}
+		break;
+	case ENCR_AES_GCM_ICV8:
+	case ENCR_AES_GCM_ICV12:
+	case ENCR_AES_GCM_ICV16:
+		switch (key_len * 8) {
+		case 128:
+			ca = IPSEC_API_CRYPTO_ALG_AES_GCM_128;
+			break;
+		case 192:
+			ca = IPSEC_API_CRYPTO_ALG_AES_GCM_192;
+			break;
+		case 256:
+			ca = IPSEC_API_CRYPTO_ALG_AES_GCM_256;
+			break;
+		default:
+			DBG1 (DBG_KNL, "Key length %d is not supported by VPP!", key_len * 8);
+			return FAILED;
+		}
+		break;
+	case ENCR_DES:
+		ca = IPSEC_API_CRYPTO_ALG_DES_CBC;
+		break;
+	case ENCR_3DES:
+		ca = IPSEC_API_CRYPTO_ALG_3DES_CBC;
+		break;
 	default:
-	  DBG1 (DBG_KNL, "Key length %d is not supported by VPP!",
-		key_len * 8);
-	  goto error;
+		DBG1(DBG_KNL, "algorithm %N not supported by VPP!",
+				encryption_algorithm_names, data->enc_alg);
+		return FAILED;
 	}
-      break;
-    case ENCR_AES_CTR:
-      switch (key_len * 8)
-	{
-	case 128:
-	  ca = IPSEC_API_CRYPTO_ALG_AES_CTR_128;
-	  break;
-	case 192:
-	  ca = IPSEC_API_CRYPTO_ALG_AES_CTR_192;
-	  break;
-	case 256:
-	  ca = IPSEC_API_CRYPTO_ALG_AES_CTR_256;
-	  break;
-	default:
-	  DBG1 (DBG_KNL, "Key length %d is not supported by VPP!",
-		key_len * 8);
-	  goto error;
-	}
-      break;
-    case ENCR_AES_GCM_ICV8:
-    case ENCR_AES_GCM_ICV12:
-    case ENCR_AES_GCM_ICV16:
-      switch (key_len * 8)
-	{
-	case 128:
-	  ca = IPSEC_API_CRYPTO_ALG_AES_GCM_128;
-	  break;
-	case 192:
-	  ca = IPSEC_API_CRYPTO_ALG_AES_GCM_192;
-	  break;
-	case 256:
-	  ca = IPSEC_API_CRYPTO_ALG_AES_GCM_256;
-	  break;
-	default:
-	  DBG1 (DBG_KNL, "Key length %d is not supported by VPP!",
-		key_len * 8);
-	  goto error;
-	}
-      break;
-    case ENCR_DES:
-      ca = IPSEC_API_CRYPTO_ALG_DES_CBC;
-      break;
-    case ENCR_3DES:
-      ca = IPSEC_API_CRYPTO_ALG_3DES_CBC;
-      break;
-    default:
-      DBG1 (DBG_KNL, "algorithm %N not supported by VPP!",
-	    encryption_algorithm_names, data->enc_alg);
-      goto error;
-    }
 	mp.entry.crypto_algorithm = htonl(ca);
 	mp.entry.crypto_key.length = key_len < 128 ? key_len : 128;
 	memcpy (mp.entry.crypto_key.data, data->enc_key.ptr, mp.entry.crypto_key.length);
@@ -556,8 +441,7 @@ METHOD(kernel_ipsec_t, add_sa, status_t, kernel_vpp_ipsec_t *this,
 	default:
 		DBG1 (DBG_KNL, "algorithm %N not supported by VPP!",
 				integrity_algorithm_names, data->int_alg);
-		goto error;
-		break;
+		return FAILED;
 	}
 
 	mp.entry.integrity_algorithm = htonl (ia);
@@ -574,18 +458,21 @@ METHOD(kernel_ipsec_t, add_sa, status_t, kernel_vpp_ipsec_t *this,
 		flags |= IPSEC_API_SAD_FLAG_USE_ANTI_REPLAY;
 	if (data->esn)
 		flags |= IPSEC_API_SAD_FLAG_USE_ESN;
+
+	printf("!!!!!!!!!!!!!!!!!!!!!! use_tunnel_mode_sa %d\n", this->use_tunnel_mode_sa);
+
 	if (this->use_tunnel_mode_sa && data->mode == MODE_TUNNEL) {
-		if (id->src->get_family (id->src) == AF_INET6)
+		if (id->src->get_family (id->src) == AF_INET6) {
 			flags |= IPSEC_API_SAD_FLAG_IS_TUNNEL_V6;
-		else
+		} else {
 			flags |= IPSEC_API_SAD_FLAG_IS_TUNNEL;
+		}
     	}
 	if (data->encap) {
-		DBG1 (DBG_KNL, "UDP encap!!!!!!!!!!!!!!!!!!!!");
 		flags |= IPSEC_API_SAD_FLAG_UDP_ENCAP;
 		if (id->src->get_family(id->src) != AF_INET ||
 				id->dst->get_family(id->dst) != AF_INET) {
-			DBG1 (DBG_KNL, "UDP encap not IPv4 !!!!!!!!!!!!!!!!!!!!");
+			DBG1 (DBG_KNL, "UDP encap not IPv4");
 		} else {
 			struct sockaddr_in *src_sockaddr;
 			struct sockaddr_in *dst_sockaddr;
@@ -593,50 +480,42 @@ METHOD(kernel_ipsec_t, add_sa, status_t, kernel_vpp_ipsec_t *this,
 			src_sockaddr = (struct sockaddr_in *)id->src->get_sockaddr(id->src);
 			dst_sockaddr = (struct sockaddr_in *)id->dst->get_sockaddr(id->dst);
 
-//			dst_sockaddr = 
-			printf("src_port=%u; dst_port=%u\n",
-					ntohs(src_sockaddr->sin_port), ntohs(dst_sockaddr->sin_port));
-
 			mp.entry.udp_src_port = src_sockaddr->sin_port;
 			mp.entry.udp_dst_port = dst_sockaddr->sin_port;
 		}
 
 	}
-  mp.entry.flags = htonl (flags);
+	mp.entry.flags = htonl(flags);
 
-  bool is_ipv6 = false;
-  if (id->src->get_family (id->src) == AF_INET6)
-    {
-      is_ipv6 = true;
-      mp.entry.tunnel_src.af = htonl (ADDRESS_IP6);
-      mp.entry.tunnel_dst.af = htonl (ADDRESS_IP6);
-    }
-  else
-    {
-      mp.entry.tunnel_src.af = htonl (ADDRESS_IP4);
-      mp.entry.tunnel_dst.af = htonl (ADDRESS_IP4);
-    }
-  src = id->src->get_address (id->src);
-  memcpy (is_ipv6 ? mp.entry.tunnel_src.un.ip6 : mp.entry.tunnel_src.un.ip4,
-	  src.ptr, src.len);
-  dst = id->dst->get_address (id->dst);
-  memcpy (is_ipv6 ? mp.entry.tunnel_dst.un.ip6 : mp.entry.tunnel_dst.un.ip4,
-	  dst.ptr, dst.len);
+	bool is_ipv6 = false;
+	if (id->src->get_family (id->src) == AF_INET6) {
+		is_ipv6 = true;
+		mp.entry.tunnel_src.af = htonl (ADDRESS_IP6);
+		mp.entry.tunnel_dst.af = htonl (ADDRESS_IP6);
+	} else {
+		mp.entry.tunnel_src.af = htonl (ADDRESS_IP4);
+		mp.entry.tunnel_dst.af = htonl (ADDRESS_IP4);
+	}
+	src = id->src->get_address (id->src);
+	memcpy (is_ipv6 ? mp.entry.tunnel_src.un.ip6 : mp.entry.tunnel_src.un.ip4,
+			src.ptr, src.len);
+	dst = id->dst->get_address (id->dst);
+	memcpy (is_ipv6 ? mp.entry.tunnel_dst.un.ip6 : mp.entry.tunnel_dst.un.ip4,
+			dst.ptr, dst.len);
 
-  err = NAAS_API_INVOKE (mp, rmp);
-  if (rmp)
-    stat_index = ntohl(rmp->stat_index);
-  naas_api_msg_free (rmp);
-  if (err.num && err.type == NAAS_ERR_ERRNO)
-    {
-      DBG1 (DBG_KNL, "vac adding SA with SPI %.8x failed", htonl(id->spi));
-      goto error;
-    }
-  if (err.num && err.type == NAAS_ERR_VNET)
-    {
-      DBG1 (DBG_KNL, "add SA failed rv:%d", err.num);
-      goto error;
-    }
+	err = NAAS_API_INVOKE(mp, rmp);
+	if (rmp) {
+		stat_index = ntohl(rmp->stat_index);
+	}
+	naas_api_msg_free(rmp);
+	if (err.num && err.type == NAAS_ERR_ERRNO) {
+		DBG1(DBG_KNL, "vac adding SA with SPI %.8x failed", htonl(id->spi));
+		return FAILED;
+	}
+	if (err.num && err.type == NAAS_ERR_VNET) {
+		DBG1(DBG_KNL, "add SA failed rv:%d", err.num);
+		return FAILED;
+	}
 
 	this->mutex->lock(this->mutex);
 	key.src = id->src;
@@ -671,21 +550,17 @@ METHOD(kernel_ipsec_t, add_sa, status_t, kernel_vpp_ipsec_t *this,
 
 	sa->stat_index = stat_index;
 
-
 	schedule_expiration(this, data->lifetime, id);
-	rv = SUCCESS;
-
-error:
 	this->mutex->unlock(this->mutex);
-	return rv;
+
+	return SUCCESS;
 }
 
 METHOD(kernel_ipsec_t, query_sa, status_t, kernel_vpp_ipsec_t *this,
 		kernel_ipsec_sa_id_t *id, kernel_ipsec_query_sa_t *data,
 	uint64_t *bytes, uint64_t *packets, time_t *time)
 {
-	status_t rv;
-	kernel_vpp_sa_t *sa;
+	kernel_vpp_child_sa_t *sa;
 	u32 *dir;
 	int i, k, rv_stat;
 	stat_segment_data_t *res;
@@ -693,10 +568,7 @@ METHOD(kernel_ipsec_t, query_sa, status_t, kernel_vpp_ipsec_t *this,
 	uint64_t res_bytes;
 	uint64_t res_packets;
 
-	VAC_METHOD;
-
 	dir = NULL;
-	rv = FAILED;
 	res = NULL;
 	pattern = NULL;
 	res_bytes = 0;
@@ -705,8 +577,8 @@ METHOD(kernel_ipsec_t, query_sa, status_t, kernel_vpp_ipsec_t *this,
 	this->mutex->lock(this->mutex);
 	sa = this->sas->get(this->sas, id);
 	if (!sa) {
-		this->mutex->unlock (this->mutex);
 		DBG1 (DBG_KNL, "CHILD_SA withs SPI %.8x not found", htonl(id->spi));
+		this->mutex->unlock (this->mutex);
 		return NOT_FOUND;
 	}
 
@@ -730,70 +602,61 @@ METHOD(kernel_ipsec_t, query_sa, status_t, kernel_vpp_ipsec_t *this,
 		}
 	}
 
-  vec_add1 (pattern, (u8 *) "/net/ipsec/sa");
-  dir = stat_segment_ls_r ((u8 **) pattern, this->sm);
-  res = stat_segment_dump_r (dir, this->sm);
-  /* i-loop for each results find by pattern - here two:
-   * 1. /net/ipsec/sa
-   * 2. /net/ipsec/sa/lost
-   */
-  for (i = 0; i < vec_len (res); i++)
-    {
-      switch (res[i].type)
-	{
-	/* type for how many packets are lost */
-	case STAT_DIR_TYPE_COUNTER_VECTOR_SIMPLE:
-	  if (res[i].simple_counter_vec == 0)
-	    continue;
-	  break;
-	/* type for counter for each SA */
-	case STAT_DIR_TYPE_COUNTER_VECTOR_COMBINED:
-	  if (res[i].combined_counter_vec == 0)
-	    continue;
-	  /* k-loop for each threads - that you run VPP */
-	  for (k = 0; k < vec_len (res[i].combined_counter_vec); k++)
-	    {
-	      if (sa->stat_index <= vec_len (res[i].combined_counter_vec[k]))
-		{
-		  DBG1(DBG_KNL, "Thread: %d, Packets: %lu, Bytes: %lu", k,
-			res[i].combined_counter_vec[k][sa->stat_index].packets,
-			res[i].combined_counter_vec[k][sa->stat_index].bytes);
-		  res_bytes +=
-		    res[i].combined_counter_vec[k][sa->stat_index].bytes;
-		  res_packets +=
-		    res[i].combined_counter_vec[k][sa->stat_index].packets;
+	vec_add1 (pattern, (u8 *) "/net/ipsec/sa");
+	dir = stat_segment_ls_r ((u8 **) pattern, this->sm);
+	res = stat_segment_dump_r (dir, this->sm);
+ 	// i-loop for each results find by pattern - here two:
+	// 1. /net/ipsec/sa
+	// 2. /net/ipsec/sa/lost
+	for (i = 0; i < vec_len (res); i++) {
+		switch (res[i].type) {
+		// type for how many packets are lost
+		case STAT_DIR_TYPE_COUNTER_VECTOR_SIMPLE:
+			if (res[i].simple_counter_vec == 0) {
+				continue;
+			}
+			break;
+		// type for counter for each SA
+		case STAT_DIR_TYPE_COUNTER_VECTOR_COMBINED:
+			if (res[i].combined_counter_vec == 0) {
+				continue;
+			}
+			// k-loop for each threads - that you run VPP
+			for (k = 0; k < vec_len (res[i].combined_counter_vec); k++) {
+				if (sa->stat_index <= vec_len (res[i].combined_counter_vec[k])) {
+					DBG1(DBG_KNL, "Thread: %d, Packets: %lu, Bytes: %lu", k,
+						res[i].combined_counter_vec[k][sa->stat_index].packets,
+						res[i].combined_counter_vec[k][sa->stat_index].bytes);
+					res_bytes += res[i].combined_counter_vec[k][sa->stat_index].bytes;
+					res_packets += res[i].combined_counter_vec[k][sa->stat_index].packets;
+				}
+			}
+			break;
+		case STAT_DIR_TYPE_NAME_VECTOR:
+			if (res[i].name_vector == 0)
+				continue;
+			break;
+		default:
+			break;
 		}
-	    }
-	  break;
-	case STAT_DIR_TYPE_NAME_VECTOR:
-	  if (res[i].name_vector == 0)
-	    continue;
-	  break;
-        default:
-          break;
 	}
-    }
 
-  vec_free (pattern);
-  vec_free (dir);
-  stat_segment_data_free (res);
+	vec_free(pattern);
+	vec_free(dir);
+	stat_segment_data_free(res);
 
-  if (bytes)
-    {
-      *bytes = res_bytes;
-    }
-  if (packets)
-    {
-      *packets = res_packets;
-    }
-  if (time)
-    {
-      *time = 0;
-    }
+	if (bytes) {
+		*bytes = res_bytes;
+	}
+	if (packets) {
+		*packets = res_packets;
+	}
+	if (time) {
+		*time = 0;
+	}
 
 	this->mutex->unlock (this->mutex);
-	rv = SUCCESS;
-	return rv;
+	return SUCCESS;
 }
 
 status_t
@@ -803,9 +666,7 @@ kernel_vpp_del_sa(kernel_vpp_ipsec_t *this, kernel_ipsec_sa_id_t *id)
 	vl_api_ipsec_sad_entry_add_del_t mp;
 	vl_api_ipsec_sad_entry_add_del_reply_t *rmp;
 	status_t rv;
-	kernel_vpp_sa_t *sa;
-
-	VAC_METHOD;
+	kernel_vpp_child_sa_t *sa;
 
 	rv = FAILED;
 
@@ -818,11 +679,11 @@ kernel_vpp_del_sa(kernel_vpp_ipsec_t *this, kernel_ipsec_sa_id_t *id)
 	}
 	memset (&mp, 0, sizeof (mp));
 	mp.is_add = 0;
-	u16 msg_id = vl_msg_api_get_msg_index ((u8 *) "ipsec_sad_entry_add_del_ab64b5c6");
+	u16 msg_id = vl_msg_api_get_msg_index((u8 *) "ipsec_sad_entry_add_del_ab64b5c6");
 	mp._vl_msg_id = htons (msg_id);
 	mp.entry.sad_id = htonl(sa->id);
 
-  	err = NAAS_API_INVOKE (mp, rmp);
+  	err = NAAS_API_INVOKE(mp, rmp);
 	naas_api_msg_free(rmp);
 	if (err.num && err.type == NAAS_ERR_ERRNO) {
 		DBG1(DBG_KNL, "removing SA_CHILD with SPI %.8x failed", htonl(id->spi));
@@ -845,15 +706,12 @@ error:
 METHOD(kernel_ipsec_t, del_sa, status_t, kernel_vpp_ipsec_t *this,
 		kernel_ipsec_sa_id_t *id, kernel_ipsec_del_sa_t *data)
 {
-	VAC_METHOD;
 	return kernel_vpp_del_sa(this, id);
 }
 
 METHOD(kernel_ipsec_t, update_sa, status_t, kernel_vpp_ipsec_t *this,
 		kernel_ipsec_sa_id_t *id, kernel_ipsec_update_sa_t *data)
 {
-	VAC_METHOD;
-
 	DBG1(DBG_KNL, "update SA_CHILD %#H == %#H with SPI %.8x to %#H == %#H not supported",
 			id->src, id->dst, htonl(id->spi),
 			data->new_src, data->new_dst);
@@ -863,63 +721,45 @@ METHOD(kernel_ipsec_t, update_sa, status_t, kernel_vpp_ipsec_t *this,
 
 METHOD (kernel_ipsec_t, flush_sas, status_t, kernel_vpp_ipsec_t *this)
 {
-  VAC_METHOD;
-  return SUCCESS;
-#if 0
-  enumerator_t *enumerator;
-  int out_len;
-  char *out;
-  vl_api_ipsec_sad_entry_add_del_t *mp = NULL;
-  vl_api_ipsec_sad_entry_add_del_reply_t *rmp = NULL;
-  kernel_vpp_child_sa_t *sa = NULL;
-  status_t rv = FAILED;
+	enumerator_t *enumerator;
+	vl_api_ipsec_sad_entry_add_del_t mp;
+	vl_api_ipsec_sad_entry_add_del_reply_t *rmp;
+	kernel_vpp_child_sa_t *sa = NULL;
+	status_t rv = FAILED;
+	naas_err_t err;
 
-  this->mutex->lock (this->mutex);
-  enumerator = this->sas->create_enumerator (this->sas);
-  while (enumerator->enumerate (enumerator, &sa))
-    {
-      mp = vl_msg_api_alloc (sizeof (*mp));
-      memset (mp, 0, sizeof (*mp));
-      u16 msg_id =
-	vl_msg_api_get_msg_index ((u8 *) "ipsec_sad_entry_add_del_ab64b5c6");
-      mp->_vl_msg_id = htons (msg_id);
-      mp->entry.sad_id = htonl (sa->id);
-      mp->is_add = 0;
-      VAC_LOG("ipsec_sad_entry_add_del");
-      if (vac->send (vac, (char *) mp, sizeof (*mp), &out, &out_len))
-	{
-	  DBG1 (DBG_KNL, "flush_sas failed!!!!");
-	  goto error;
+	this->mutex->lock (this->mutex);
+	enumerator = this->sas->create_enumerator (this->sas);
+	while (enumerator->enumerate(enumerator, &sa)) {
+		memset(&mp, 0, sizeof(mp));
+		u16 msg_id = vl_msg_api_get_msg_index ((u8 *) "ipsec_sad_entry_add_del_ab64b5c6");
+		mp._vl_msg_id = htons (msg_id);
+		mp.entry.sad_id = htonl (sa->id);
+		mp.is_add = 0;
+		err = NAAS_API_INVOKE(mp, rmp);
+		naas_api_msg_free(rmp);
+		if (err.num) {
+			if (err.type == NAAS_ERR_ERRNO) {
+				DBG1 (DBG_KNL, "flush_sas failed!!!!");
+			} else {
+				DBG1(DBG_KNL, "flush_sas failed!!!! rv: %d", err.num);
+			}
+			rv = FAILED;
+			goto error;
+		}
+		this->sas->remove_at (this->sas, enumerator);
+		free(sa);
 	}
-      rmp = (void *) out;
-      if (rmp->retval)
-	{
-	  DBG1 (DBG_KNL, "flush_sas failed!!!! rv: %d", ntohl (rmp->retval));
-	  goto error;
-	}
-      free (out);
-      vl_msg_api_free (mp);
-      this->sas->remove_at (this->sas, enumerator);
-      free (sa);
-    }
-  rv = SUCCESS;
+	rv = SUCCESS;
 error:
-  if (out != NULL)
-    free (out);
-  if (mp != NULL)
-    vl_msg_api_free (mp);
-
-  enumerator->destroy (enumerator);
-  this->mutex->unlock (this->mutex);
-
-  return rv;
-#endif
+	enumerator->destroy (enumerator);
+	this->mutex->unlock (this->mutex);
+	return rv;
 }
 
 METHOD(kernel_ipsec_t, add_policy, status_t, kernel_vpp_ipsec_t *this,
 		kernel_ipsec_policy_id_t *id, kernel_ipsec_manage_policy_t *data)
 {
-	VAC_METHOD;
 	return SUCCESS;
 }
 
@@ -927,35 +767,28 @@ METHOD(kernel_ipsec_t, query_policy, status_t,
 		kernel_vpp_ipsec_t *this, kernel_ipsec_policy_id_t *id,
 		kernel_ipsec_query_policy_t *data, time_t *use_time)
 {
-	VAC_METHOD;
 	return NOT_SUPPORTED;
 }
 
 METHOD(kernel_ipsec_t, del_policy, status_t, kernel_vpp_ipsec_t *this,
 		kernel_ipsec_policy_id_t *id, kernel_ipsec_manage_policy_t *data)
 {
-	VAC_METHOD;
 	return SUCCESS;
 }
 
 METHOD(kernel_ipsec_t, flush_policies, status_t, kernel_vpp_ipsec_t *this)
 {
-	VAC_METHOD;
 	return NOT_SUPPORTED;
 }
 
 METHOD(kernel_ipsec_t, bypass_socket, bool, kernel_vpp_ipsec_t *this, int fd, int family)
 {
-	VAC_METHOD;
 	return FALSE;
 }
 
 METHOD (kernel_ipsec_t, enable_udp_decap, bool,
 		kernel_vpp_ipsec_t *this, int fd, int family, u_int16_t port)
 {
-	VAC_METHOD;
-//	DBG1(DBG_KNL, "enable_udp_decap not supported!!!!!!!!!!!!!!!!!!!!!!!!!");
-//	return FALSE;
 	return TRUE;
 }
 
@@ -1006,7 +839,7 @@ kernel_vpp_child_up(kernel_vpp_listener_t *this, ike_sa_t *ike_sa, child_sa_t *c
 	uint32_t unique_id, sw_if_index, i_spi, o_spi;
 	protocol_id_t proto;
 	kernel_ipsec_sa_id_t o_key, i_key;
-	kernel_vpp_sa_t *i_sa, *o_sa;
+	kernel_vpp_child_sa_t *i_sa, *o_sa;
 
 	proto = child_sa->get_protocol(child_sa);
 
@@ -1054,7 +887,7 @@ METHOD(listener_t, child_updown, bool,
 	i_spi = child_sa->get_spi(child_sa, TRUE);
 	o_spi = child_sa->get_spi(child_sa, FALSE);
 
-	VAC_LOG("child_%s %.8x_i %.8x_o", up ? "up" : "down", ntohl(i_spi), ntohl(o_spi));
+	MYDBG("child_%s %.8x_i %.8x_o", up ? "up" : "down", ntohl(i_spi), ntohl(o_spi));
 
 	if (up) {
 		kernel_vpp_child_up(this, ike_sa, child_sa);
@@ -1078,7 +911,7 @@ METHOD(listener_t, child_rekey, bool,
 	old_i_spi = old->get_spi(old, TRUE);
 	old_o_spi = old->get_spi(old, FALSE);
 
-	VAC_LOG("child_rekey %.8x_i %.8x_o => %.8x_i %.8x_o",
+	MYDBG("child_rekey %.8x_i %.8x_o => %.8x_i %.8x_o",
 			ntohl(old_i_spi), ntohl(old_o_spi), ntohl(new_i_spi), ntohl(new_o_spi));
 
 	kernel_vpp_child_up(this, ike_sa, new);
@@ -1153,11 +986,6 @@ kernel_vpp_ipsec_create()
 
 	return this;
 }
-//=========================================================
-
-typedef struct private_kernel_vpp_plugin {
-  	kernel_vpp_plugin_t public;
-} private_kernel_vpp_plugin_t;
 
 METHOD(plugin_t, get_name, char *, private_kernel_vpp_plugin_t *this)
 {

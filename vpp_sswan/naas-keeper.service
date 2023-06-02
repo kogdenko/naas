@@ -1,0 +1,15 @@
+[Unit]
+Description=MTS NAAS Remote Access Server
+After=network-online.target
+Wants=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/naas-keeper.sh start
+ExecStop=/usr/local/bin/naas-keeper.sh stop
+#ExecReload=/usr/local/bin/naas-keeper.sh restart
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+Alias=naas-keeper

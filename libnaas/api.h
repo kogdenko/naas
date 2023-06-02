@@ -9,6 +9,7 @@
 #include <vlibmemory/api.h>
 #include <vppinfra/error.h>
 #include <vpp-api/client/vppapiclient.h>
+#include <vpp/api/vpe.api_types.h>
 #include <vnet/interface.api_types.h>
 #include <vnet/ip/ip.api_enum.h>
 #include <vnet/ip/ip_types_api.h>
@@ -57,8 +58,10 @@ int naas_api_invoke(void *m, int mlen, void **r, int rlen);
 #define NAAS_API_INVOKE(mp, rp) NAAS_API_INVOKE3(&mp, sizeof(mp), rp)
 
 typedef int (naas_api_dump_handler_t)(void *user, void *user2, void *data, int len);
-int naas_api_dump(void *mp, int mlen, char *details_msg_name, naas_api_dump_handler_t handler,
+naas_err_t naas_api_dump(void *mp, int mlen, char *details_msg_name, naas_api_dump_handler_t handler,
 		void *user0, void *user1);
+
+naas_err_t naas_api_show_version();
 
 struct naas_api_sw_interface {
 	uint32_t sw_if_index;
@@ -68,6 +71,8 @@ struct naas_api_sw_interface {
 typedef void (*naas_api_sw_interface_dump_f)(void *user, struct naas_api_sw_interface *interface);
 naas_err_t naas_api_sw_interface_dump(naas_api_sw_interface_dump_f handler, void *user,
 		const char *name_filter);
+
+naas_err_t naas_api_create_loopback(uint32_t *p_sw_if_index);
 
 naas_err_t naas_api_sw_interface_set_flags(uint32_t sw_if_index, vl_api_if_status_flags_t flags);
 
@@ -96,9 +101,15 @@ naas_err_t naas_api_ipsec_spd_add_del(int is_add, uint32_t spd_id);
 
 naas_err_t naas_api_ipsec_itf_create(int instance, uint32_t *sw_if_index);
 
+naas_err_t naas_api_ipsec_itf_delete(uint32_t sw_if_index);
+
 naas_err_t naas_api_ipsec_spd_add_del(int is_add, uint32_t spd_id);
 
-naas_err_t naas_api_ipsec_tunnel_protect_update(uint32_t sw_if_index, uint32_t sa_in, uint32_t sa_out);
+naas_err_t naas_api_ipsec_tunnel_protect_dump(uint32_t sw_if_index,
+		uint32_t *sa_in, uint32_t *sa_out);
+
+naas_err_t naas_api_ipsec_tunnel_protect_update(uint32_t sw_if_index,
+		uint32_t sa_in, uint32_t sa_out);
 
 typedef void (*naas_api_ipsec_sa_dump_f)(void *user, uint32_t sad_id, uint32_t spi);
 naas_err_t naas_api_ipsec_sa_dump(naas_api_ipsec_sa_dump_f handler, void *user);

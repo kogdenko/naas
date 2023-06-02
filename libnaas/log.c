@@ -100,7 +100,7 @@ naas_log_flush(int level, struct naas_strbuf *sb)
 
 	s = naas_strbuf_cstr(sb);
 	syslog(level, "%s", s);
-	//printf("%s\n", s);
+	printf("%s\n", s);
 }
 
 void

@@ -159,9 +159,6 @@ def vpp_sswan(env, deps):
 
 	srcs = [
 		'vpp_sswan/kernel_vpp_plugin.c',
-		'vpp_sswan/kernel_vpp_shared.c',
-		'vpp_sswan/kernel_vpp_ipsec.c',
-		'vpp_sswan/kernel_vpp_net.c',
 	]
 
 	ldflags = [
@@ -182,35 +179,6 @@ def vpp_sswan(env, deps):
 	return lib
 
 
-def naas_route_based_updown(env, deps):
-	global libnaas_ld
-	sswan = get_sswan() 
-
-	cflags = [
-		'-I/' + sswan + '/src/libcharon/plugins/vici/',
-	]
-
-	ldflags = [
-		'-L/usr/lib/ipsec',
-		'-lstrongswan',
-		'-lvici',
-		libnaas_ld,
-	]
-
-	srcs = [
-		'naas-route-based-updown/main.c',
-	]
-
-	env = env.Clone()
-	env.Append(CFLAGS = flags_to_string(cflags))
-	env.Append(LINKFLAGS = flags_to_string(ldflags))
-	prog = env.Program('bin/naas-route-based-updown', srcs)
-	for dep in deps:
-		Requires(prog, dep)
-	install_prog(env, prog)
-	return prog
-
-
 def build_deb(env):
 	global git_version
 
@@ -218,28 +186,42 @@ def build_deb(env):
 	DEBVERSION = git_version
 	DEBMAINT = "Konstantin Kogdenko <k.kogdenko@gmail.com>"
 	DEBARCH = "amd64"
-	DEBDEPENDS = "vpp, vpp-dev, libvppinfra, libvppinfra-dev, libstrongswan, strongswan-swanctl"
+	#DEBDEPENDS = "vpp, vpp-dev, libvppinfra, libvppinfra-dev, libstrongswan, strongswan-swanctl"
+	DEBDEPENDS = ""
 	DEBDESC = "MTS Naas Package"
 
 	libnl_path = "opt/libnl-227.27.0/lib/"
+
 	libnl = libnl_path + "libnl-3.so.200.27.0"
+	libnl_symlink = libnl_path + "libnl-3.so.200"
+
 	libnl_route = libnl_path + "libnl-route-3.so.200.27.0"
+	libnl_route_symlink = libnl_path + "libnl-route-3.so.200"
+
 	libnl_cli = libnl_path + "libnl-cli-3.so.200.27.0"
+	libnl_cli_symlink = libnl_path + "libnl-cli-3.so.200"
+
+	libnl_nf = libnl_path + "libnl-nf-3.so.200.27.0"
+	libnl_nf_symlink = libnl_path + "libnl-nf-3.so.200"
 
 	vpp_lcpd = "naas-vpp-lcpd"
-	route_based_updown = "naas-route-based-updown"
 
 	DEBFILES = [
 		("etc/ld.so.conf.d/ipsec.conf", "#libnaas/ld-ipsec.conf"),
 		("usr/local/lib/" + libnaas_name, "#bin/" + libnaas_name),
 		(libnl, "/" + libnl),
+		(libnl_symlink, "/" + libnl_symlink),
 		(libnl_route, "/" + libnl_route),
+		(libnl_route_symlink, "/" + libnl_route_symlink),
 		(libnl_cli, "/" + libnl_cli),
+		(libnl_cli_symlink, "/" + libnl_cli_symlink),
+		(libnl_nf, "/" + libnl_nf),
+		(libnl_nf_symlink, "/" + libnl_nf_symlink),
 		("usr/local/bin/" + vpp_lcpd, "#bin/" + vpp_lcpd),
-		("usr/local/bin/" + route_based_updown, "#bin/" + route_based_updown),
-		("etc/naas/naas-updown.sh", "#naas-route-based-updown/updown.sh"),
-		("etc/naas/kernel-vpp.conf", "#naas-route-based-updown/kernel-vpp.conf"),
+		("etc/naas/kernel-vpp.conf", "#vpp_sswan/kernel-vpp.conf"),
 		("etc/naas/libstrongswan-kernel-vpp.so", "#bin/libstrongswan-kernel-vpp.so"),
+		("lib/systemd/system/naas-keeper.service", "vpp_sswan/naas-keeper.service"),
+		("usr/local/bin/naas-keeper.sh", "vpp_sswan/naas-keeper.sh"),
 	]
 
 	debpkg = '#%s_%s_%s.deb' % (DEBNAME, git_version, DEBARCH)
@@ -320,7 +302,6 @@ libnaas = build_libnaas(env)
 libstrongswan_kernel_vpp = vpp_sswan(env, [ libnaas ])
 
 naas_vpp_lcpd(env, [ libnaas ])
-naas_route_based_updown(env, [ libnaas ])
 
 if 'deb' in COMMAND_LINE_TARGETS:
 	build_deb(env)

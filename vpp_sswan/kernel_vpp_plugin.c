@@ -880,9 +880,9 @@ kernel_vpp_child_up(kernel_vpp_listener_t *this, ike_sa_t *ike_sa, child_sa_t *c
 METHOD(listener_t, child_updown, bool,
 		kernel_vpp_listener_t *this, ike_sa_t *ike_sa, child_sa_t *child_sa, bool up)
 {
-	uint32_t unique_id, i_spi, o_spi, sw_if_index;
+	uint32_t /*unique_id,*/ i_spi, o_spi/*, sw_if_index*/;
 
-	unique_id = ike_sa->get_unique_id(ike_sa);
+//	unique_id = ike_sa->get_unique_id(ike_sa);
 
 	i_spi = child_sa->get_spi(child_sa, TRUE);
 	o_spi = child_sa->get_spi(child_sa, FALSE);
@@ -892,10 +892,11 @@ METHOD(listener_t, child_updown, bool,
 	if (up) {
 		kernel_vpp_child_up(this, ike_sa, child_sa);
 	} else {
-		sw_if_index = get_ipsec_sw_if_index(unique_id);
+/*		sw_if_index = get_ipsec_sw_if_index(unique_id);
 		if (sw_if_index != ~0) {
+			printf("DELETE!!!!!\n");
 			naas_api_ipsec_itf_delete(sw_if_index);
-		}
+		}*/
 	}
 
 	return TRUE;

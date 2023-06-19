@@ -102,7 +102,7 @@ def process_msg(vpp, msg):
 
 
 
-async def main(args):
+async def main(vpp, args):
 	nc = await nats.connect(args.nats_server)
 
 	sub = await nc.subscribe("updown")
@@ -110,7 +110,7 @@ async def main(args):
 	while True:
 		try:
 			msg = await sub.next_msg()
-			process_msg(msg)
+			process_msg(vpp, msg.data.decode("utf-8"))
 		except nats.errors.TimeoutError:
 			pass
 		except Exception:
@@ -121,6 +121,8 @@ async def main(args):
 
 
 if __name__ == '__main__':
+	vpp = connect_vpp(load_json_api_files())
+
 	#process_msg(vpp, "add " + test_msg)
 	#process_msg(vpp, "del " + test_msg)
 	#return
@@ -131,6 +133,5 @@ if __name__ == '__main__':
 
 	args = ap.parse_args()
 
-	vpp = connect_vpp(load_json_api_files())
-	asyncio.run(main(args))
+	asyncio.run(main(vpp, args))
 

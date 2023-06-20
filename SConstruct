@@ -182,6 +182,8 @@ def vpp_sswan(env, deps):
 def build_deb(env):
 	global git_version
 
+	system("pyinstaller -y -F vpp_sswan/naas-updown-server.py")
+
 	DEBNAME = "naas"
 	DEBVERSION = git_version
 	DEBMAINT = "Konstantin Kogdenko <k.kogdenko@gmail.com>"
@@ -222,6 +224,8 @@ def build_deb(env):
 		("etc/naas/libstrongswan-kernel-vpp.so", "#bin/libstrongswan-kernel-vpp.so"),
 		("lib/systemd/system/naas-keeper.service", "vpp_sswan/naas-keeper.service"),
 		("usr/local/bin/naas-keeper.sh", "vpp_sswan/naas-keeper.sh"),
+		("usr/local/bin/naas-updown.sh", "vpp_sswan/naas-updown.sh"),
+		("usr/local/bin/naas-updown-server", "dist/naas-updown-server"),
 	]
 
 	debpkg = '#%s_%s_%s.deb' % (DEBNAME, git_version, DEBARCH)

@@ -121,8 +121,6 @@ async def main(vpp, args):
 
 
 if __name__ == '__main__':
-	vpp = connect_vpp(load_json_api_files())
-
 	#process_msg(vpp, "add " + test_msg)
 	#process_msg(vpp, "del " + test_msg)
 	#return
@@ -132,6 +130,8 @@ if __name__ == '__main__':
 			help="Specify nats server ip address")
 
 	args = ap.parse_args()
+
+	vpp = connect_vpp(load_json_api_files())
 
 	asyncio.run(main(vpp, args))
 

@@ -6,47 +6,47 @@ import subprocess
 COMPILER='clang'
 
 def die(s):
-    print(s)
-    Exit(1)
+	print(s)
+	Exit(1)
 
 
 def bytes_to_str(b):
-    return b.decode('utf-8').strip()
+	return b.decode('utf-8').strip()
 
 
 def system(cmd, failure_tollerance=False):
-    proc = subprocess.Popen(cmd.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    try:
-        out, err = proc.communicate()
-    except:
-        proc.kill();
-        die("Command '%s' failed, exception: '%s'" % (cmd, sys.exc_info()[0]))
+	proc = subprocess.Popen(cmd.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+	try:
+		out, err = proc.communicate()
+	except:
+		proc.kill();
+		die("Command '%s' failed, exception: '%s'" % (cmd, sys.exc_info()[0]))
 
-    out = bytes_to_str(out)
-    err = bytes_to_str(err)
-    rc = proc.returncode
+	out = bytes_to_str(out)
+	err = bytes_to_str(err)
+	rc = proc.returncode
 
-#    print("$ %s # $? = %d\n%s\n%s" % (cmd, rc, out, err))
+#	print("$ %s # $? = %d\n%s\n%s" % (cmd, rc, out, err))
 
-    if rc != 0 and not failure_tollerance:
-        die("Command '%s' failed, return code: %d" % (cmd, rc))
+	if rc != 0 and not failure_tollerance:
+		die("Command '%s' failed, return code: %d" % (cmd, rc))
 
-    return rc, out, err
+	return rc, out, err
 
 
 def get_git_version():
-    if True:
-        cmd = "git describe --tags --always"
-        rc, out, _ = system(cmd)
-        if rc != 0:
-            die("Cannot extract gbtcp version")
-        return out.strip()
-    else:
-        cmd = "git log -1 --format=%H"
-        commit = system(cmd)[1].strip()
-        if len(commit) != 40:
-            die("Cannot extract gbtcp version")
-        return commit
+	if True:
+		cmd = "git describe --tags --always"
+		rc, out, _ = system(cmd)
+		if rc != 0:
+			die("Cannot extract gbtcp version")
+		return out.strip()
+	else:
+		cmd = "git log -1 --format=%H"
+		commit = system(cmd)[1].strip()
+		if len(commit) != 40:
+			die("Cannot extract gbtcp version")
+		return commit
 
 
 def flags_to_string(flags):
@@ -75,8 +75,8 @@ def naas_vpp_lcpd(env, deps):
 int
 main()
 {
-        printf("%d", SEG6_LOCAL_VRFTABLE);
-        return 0;
+	printf("%d", SEG6_LOCAL_VRFTABLE);
+	return 0;
 }
 """
 
@@ -209,6 +209,7 @@ def build_deb(env):
 	vpp_lcpd = "naas-vpp-lcpd"
 
 	DEBFILES = [
+		("DEBIAN/postinst", "share/postinst"),
 		("etc/ld.so.conf.d/ipsec.conf", "#libnaas/ld-ipsec.conf"),
 		("usr/local/lib/" + libnaas_name, "#bin/" + libnaas_name),
 		(libnl, "/" + libnl),
@@ -220,8 +221,10 @@ def build_deb(env):
 		(libnl_nf, "/" + libnl_nf),
 		(libnl_nf_symlink, "/" + libnl_nf_symlink),
 		("usr/local/bin/" + vpp_lcpd, "#bin/" + vpp_lcpd),
-		("etc/naas/kernel-vpp.conf", "#vpp_sswan/kernel-vpp.conf"),
-		("etc/naas/libstrongswan-kernel-vpp.so", "#bin/libstrongswan-kernel-vpp.so"),
+		("etc/strongswan.d/charon/kernel-vpp.conf", "#vpp_sswan/kernel-vpp.conf"),
+#		("etc/naas/kernel-vpp.conf", "#vpp_sswan/kernel-vpp.conf"),
+		("usr/lib/ipsec/plugins/libstrongswan-kernel-vpp.so", "#bin/libstrongswan-kernel-vpp.so"),
+		("usr/local/lib/ipsec/plugins/libstrongswan-kernel-vpp.so", "#bin/libstrongswan-kernel-vpp.so"),
 		("lib/systemd/system/naas-keeper.service", "vpp_sswan/naas-keeper.service"),
 		("usr/local/bin/naas-keeper.sh", "vpp_sswan/naas-keeper.sh"),
 		("usr/local/bin/naas-updown.sh", "vpp_sswan/naas-updown.sh"),

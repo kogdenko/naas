@@ -5,7 +5,7 @@ import naas
 #sys.path.insert(0, "..")
 
 n_connections = 1
-swanctl_conf_path = "/usr/local/etc/swanctl/swanctl.conf"
+swanctl_conf_path = "/etc/swanctl/conf.d/swanctl.conf"
 
 s ='''connections {
     gw-gw {
@@ -13,6 +13,7 @@ s ='''connections {
         remote_addrs = 192.168.31.11
         local {
             auth = psk
+            id = keyid:12
         }
         remote {
             auth = psk

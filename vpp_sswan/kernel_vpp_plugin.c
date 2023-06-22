@@ -61,8 +61,6 @@ typedef struct kernel_vpp_ipsec {
 
 	thread_t *keepalive;
 
-	bool use_tunnel_mode_sa;
-
 	stat_client_main_t *sm;
 } kernel_vpp_ipsec_t;
 
@@ -159,12 +157,25 @@ get_ipsec_sw_if_index(uint32_t instance)
 }
 
 static uint32_t
-get_or_create_ipsec(kernel_vpp_ipsec_t *this, uint32_t unique_id)
+get_or_create_ipsec(kernel_vpp_ipsec_t *this, ike_sa_t *ike_sa, child_sa_t *child_sa)
 {
-	uint32_t sw_if_index;
+	uint32_t sw_if_index, unique_id;
+	identification_t* peer_id;
+	host_t *src, *dst;
+	id_type_t peer_id_type;
 
+	unique_id = ike_sa->get_unique_id(ike_sa);
 	sw_if_index = get_ipsec_sw_if_index(unique_id);
 	if (sw_if_index == ~0) {
+		peer_id = ike_sa->get_other_id(ike_sa);
+		peer_id_type = peer_id->get_type(peer_id);
+		if (peer_id_type != ID_KEY_ID) {
+			src = ike_sa->get_my_host(ike_sa);
+			dst = ike_sa->get_other_host(ike_sa);
+			DBG1(DBG_KNL, "SA_CHILD %#H == %#H with SPI %.8x has invalid peerid type %d",
+					src, dst, child_sa->get_spi(child_sa, TRUE) ,peer_id_type);
+			return ~0;
+		}
 		naas_api_ipsec_itf_create(unique_id, &sw_if_index);
 		naas_api_sw_interface_set_unnumbered(1, this->loop_sw_if_index,	sw_if_index);
 	}
@@ -314,10 +325,10 @@ METHOD(kernel_ipsec_t, add_sa, status_t, kernel_vpp_ipsec_t *this,
 	vl_api_ipsec_sad_entry_add_del_t mp;
 	vl_api_ipsec_sad_entry_add_del_reply_t *rmp;
 	uint8_t ca, ia;
-	uint32_t sad_id, sw_if_index, stat_index;
+	uint32_t sad_id, stat_index;
 	chunk_t src, dst;
-	kernel_ipsec_sa_id_t key, peer_key;
-	kernel_vpp_child_sa_t *sa, *peer_sa, *i_sa, *o_sa;
+	kernel_ipsec_sa_id_t key;
+	kernel_vpp_child_sa_t *sa;
 	int key_len;
 
 	ca = ia = 0;
@@ -459,9 +470,7 @@ METHOD(kernel_ipsec_t, add_sa, status_t, kernel_vpp_ipsec_t *this,
 	if (data->esn)
 		flags |= IPSEC_API_SAD_FLAG_USE_ESN;
 
-	printf("!!!!!!!!!!!!!!!!!!!!!! use_tunnel_mode_sa %d\n", this->use_tunnel_mode_sa);
-
-	if (this->use_tunnel_mode_sa && data->mode == MODE_TUNNEL) {
+	if (data->mode == MODE_TUNNEL) {
 		if (id->src->get_family (id->src) == AF_INET6) {
 			flags |= IPSEC_API_SAD_FLAG_IS_TUNNEL_V6;
 		} else {
@@ -524,26 +533,7 @@ METHOD(kernel_ipsec_t, add_sa, status_t, kernel_vpp_ipsec_t *this,
 	key.proto = id->proto;
 
 	sa = this->sas->get(this->sas, &key);
-	if (sa != NULL) {
-		sa->id = sad_id;
-		peer_key.src = key.dst;
-		peer_key.dst = key.src;
-		peer_key.proto = key.proto;
-		peer_key.spi = sa->peer_spi;
-
-		peer_sa = this->sas->get(this->sas, &peer_key);
-		if (peer_sa != NULL && peer_sa->id != ~0) {
-			sw_if_index = get_or_create_ipsec(this, sa->unique_id);
-			if (data->inbound) {
-				i_sa = sa;
-				o_sa = peer_sa;
-			} else {
-				i_sa = peer_sa;
-				o_sa = sa;
-			}
-			naas_api_ipsec_tunnel_protect_update(sw_if_index, i_sa->id, o_sa->id);
-		}
-	} else {
+	if (sa == NULL) {
 		sa = kernel_vpp_sa_create(this, &key);
 		sa->id = sad_id;
 	}
@@ -859,7 +849,10 @@ kernel_vpp_child_up(kernel_vpp_listener_t *this, ike_sa_t *ike_sa, child_sa_t *c
 	i_key.spi = i_spi;
 	i_sa = this->ipsec->sas->get(this->ipsec->sas, &i_key);
 
-	sw_if_index = get_or_create_ipsec(this->ipsec, unique_id);
+	sw_if_index = get_or_create_ipsec(this->ipsec, ike_sa, child_sa);
+	if (sw_if_index == ~0) {
+		return;
+	}
 
 	if (o_sa != NULL && i_sa != NULL) {
 		naas_api_ipsec_tunnel_protect_update(sw_if_index, i_sa->id, o_sa->id);
@@ -969,9 +962,6 @@ kernel_vpp_ipsec_create()
 		.mutex = mutex_create(MUTEX_TYPE_DEFAULT),
 		.sas = hashtable_create((hashtable_hash_t)sa_hash,
 					(hashtable_equals_t)sa_equals, 32),
-		.use_tunnel_mode_sa = lib->settings->get_bool(lib->settings,
-				    "%s.plugins.kernel-vpp.use_tunnel_mode_sa",
-				    TRUE, lib->ns),
 		.sm = NULL,
 	);
 

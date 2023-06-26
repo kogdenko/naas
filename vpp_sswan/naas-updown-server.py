@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 #
 # pip3 install nats-py
-# pip3 install mysql-connector
+# pip3 install mysql-connector-python
 import os
 import sys
 import time

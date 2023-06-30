@@ -1,6 +1,8 @@
 #!/usr/bin/python
 # pip3 install mysql-connector-python
 
+import os
+import sys
 import time
 import ipaddress
 import mysql.connector
@@ -11,14 +13,15 @@ from naaspy import swanctl
 
 # 12[CFG] vici message size 2424108 exceeds maximum size of 524288, discarded
 # update traffic_selectors set start_addr = X'01010101'  end_addr = X'02010101' where id = 15990;
-class Generator(swanctl.MySql)
+class Generator(swanctl.MySql):
 	def __init__(self):
+		swanctl.MySql.__init__(self)
 		self.secret = "bfe364c58f4b2d9bf08f8a820b6a3f806ad60c5d9ddb58cb"
 
 
 	def helloworld(self):
-		local_id = self.add_identity(13)
-		remote_id = self.add_identity(12)
+		local_id = self.add_identity(swanctl.ID_KEY_ID, 13)
+		remote_id = self.add_identity(swanctl.ID_KEY_ID, 12)
 		secret_id = self.add_shared_secret(self.secret)
 
 		self.add_shared_secret_identity(secret_id, local_id)
@@ -29,22 +32,19 @@ class Generator(swanctl.MySql)
 
 		peer_id = self.add_peer_config("0", ike_id, local_id, remote_id)
 
-		child_id = self.add_child_config("net-net")
+		child_id = self.add_child_config("net-net", "naas-updown.sh")
 
 		self.add_peer_config_child_config(peer_id, child_id)
 
 		start_addr = ipaddress.ip_address("0.0.0.0")
 		end_addr = ipaddress.ip_address("255.255.255.255")
-		local_ts_id = self.add_traffic_selector(start_addr, end_addr)
-		remote_ts_id = self.add_traffic_selector(start_addr, end_addr)
-
-		self.add_child_config_traffic_selector(child_id, local_ts_id, swanctl.TS_KIND_LOCAL)
-		self.add_child_config_traffic_selector(child_id, remote_ts_id, swanctl.TS_KIND_REMOTE)
+		self.add_traffic_selector(child_id, swanctl.TS_LOCAL, start_addr, end_addr)
+		self.add_traffic_selector(child_id, swanctl.TS_REMOTE, start_addr, end_addr)
 
 
 	def big_simple(self, n):
-		local_id = self.add_identity(13)
-		remote_id = self.add_identity(12)
+		local_id = self.add_identity(swanctl.ID_KEY_ID, 13)
+		remote_id = self.add_identity(swanctl.ID_KEY_ID, 12)
 		secret_id = self.add_shared_secret(self.secret)
 
 		self.add_shared_secret_identity(secret_id, local_id)
@@ -53,15 +53,12 @@ class Generator(swanctl.MySql)
 		ike_id = self.add_ike_config(ipaddress.ip_address("192.168.31.11"),
 				ipaddress.ip_address("0.0.0.0"))
 
-		child_id = self.add_child_config("net-net")
+		child_id = self.add_child_config("net-net", "naas-updown.sh")
 
 		start_addr = ipaddress.ip_address("0.0.0.0")
 		end_addr = ipaddress.ip_address("255.255.255.255")
-		local_ts_id = self.add_traffic_selector(start_addr, end_addr)
-		remote_ts_id = self.add_traffic_selector(start_addr, end_addr)
-
-		self.add_child_config_traffic_selector(child_id, local_ts_id, swanctl.TS_KIND_LOCAL)
-		self.add_child_config_traffic_selector(child_id, remote_ts_id, swanctl.TS_KIND_REMOTE)
+		self.add_traffic_selector(child_id, swanctl.TS_LOCAL, start_addr, end_addr)
+		self.add_traffic_selector(child_id, swanctl.TS_REMOTE, start_addr, end_addr)
 
 		for i in range(0, n):	
 			peer_id = self.add_peer_config(str(i), ike_id, local_id, remote_id)
@@ -92,9 +89,9 @@ class Generator(swanctl.MySql)
 		
 
 	def real_world_client(self, index, n_tunnels, n_traffic_selectors):
-		local_id = self.add_identity(index)
-		remote_id = self.add_identity_ip(self.local_ip)
-		secret_id = self.add_shared_secret()
+		local_id = self.add_identity(swanctl.ID_KEY_ID, index)
+		remote_id = self.add_identity(swanctl.ID_IPV4_ADDR, self.local_ip)
+		secret_id = self.add_shared_secret(self.secret)
 	
 		self.add_shared_secret_identity(secret_id, local_id)
 		self.add_shared_secret_identity(secret_id, remote_id)
@@ -107,21 +104,19 @@ class Generator(swanctl.MySql)
 
 		for tunnel_index in range(0, n_tunnels):
 			child_name = client_name + "_" + str(tunnel_index)
-			child_id = self.add_child_config(child_name)
+			child_id = self.add_child_config(child_name, "naas-updown.sh")
 			self.add_peer_config_child_config(peer_id, child_id)
 
 			for i in range(0, n_traffic_selectors):
-				local_ts_id = self.add_traffic_selector(self.local_ts, self.local_ts + 2)
-				self.add_child_config_traffic_selector(child_id, local_ts_id,
-						swanctl.TS_KIND_LOCAL)
+				local_ts_id = self.add_traffic_selector(child_id, swanctl.TS_LOCAL,
+						self.local_ts, self.local_ts + 2)
 				self.progress_traffic_selector(child_name, self.local_ts, local_ts_id)
 				self.local_ts += 3
 
 			for i in range(0, 10):
-				remote_ts_id = self.add_traffic_selector(self.remote_ts, self.remote_ts + 2)
+				self.add_traffic_selector(child_id, swanctl.TS_REMOTE,
+						self.remote_ts, self.remote_ts + 2)
 				self.remote_ts += 3
-				self.add_child_config_traffic_selector(child_id, remote_ts_id,
-						swanctl.TS_KIND_REMOTE)
 
 
 	def real_world(self, n_clients, n_tunnels_per_client, n_traffic_selectors):
@@ -142,9 +137,10 @@ class Generator(swanctl.MySql)
 
 def main():
 	gen = Generator()
-	gen.helloworld()
+	gen.connect()
+#	gen.helloworld()
 #	gen.big_simple(100000)
-#	gen.real_world(20, 20, 30)
+	gen.real_world(2, 20, 30)
 
 
 

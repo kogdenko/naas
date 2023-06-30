@@ -22,17 +22,16 @@ def mysql_execute(conn, cmd):
 
 class MySql:
 	def __init__(self):
-		pass
-
-
-	def connect(self, host, user, password):
-		self.swanctl_db_conn = mysql.connector.connect(host=host, user=user,
-				password=password, database="swanctl")
-		# FIXME: implement algorithm to calculate
 		self.id2sql = [ None, "31", "32", "33", "34", "35", "36", "37", "38", "39", # 0-9
 			"3130", "3131", "3132", "3133", "3134", "3135", "3136", "3137", "3138", "3139", #10-19
 			"3230", "3231", "3232", "3233", "3234", "3235", "3236", "3237", "3238", "3239", #20-29
 			]
+
+
+	def connect(self, host='localhost', user='root', password=''):
+		self.swanctl_db_conn = mysql.connector.connect(host=host, user=user,
+				password=password, database="swanctl")
+		# FIXME: implement algorithm to calculate
 
 
 	def execute(self, cmd):
@@ -44,9 +43,9 @@ class MySql:
 
 
 	def get_shared_secret_by_identity_id(self, identity_id):
-		c = self.execute(("select data from shared_secrets where id > "
+		c = self.execute(("select data from shared_secrets where id in "
 				"(select shared_secret from shared_secret_identity "
-				"where identity = %d LIMIT 1)" % identity_id))
+				"where identity = %d)" % identity_id))
 		row = c.fetchone()
 		if row == None:
 			return None
@@ -70,6 +69,7 @@ class MySql:
 		self.execute("insert into child_config_traffic_selector (child_cfg, traffic_selector, kind) "
 				"values (%d, %d, %d)" % (child_id, ts_id, kind))
 		self.commit()
+		return ts_id
 
 
 	def del_traffic_selector(self, child_id, ts_id):
@@ -99,7 +99,7 @@ class MySql:
 
 	# ID_IPV4_ADDR
 	def id_ipv4_addr_2_sql(self, ipv4_addr):
-		return "X'%.8x'" % int(ip)
+		return "X'%.8x'" % int(ipv4_addr)
 
 
 	def add_identity(self, identity_type, identity):

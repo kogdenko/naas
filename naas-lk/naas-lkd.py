@@ -4,6 +4,7 @@ import sys
 import math
 import ipaddress
 import threading
+import argparse
 import hashlib
 import secrets
 import mysql.connector
@@ -20,11 +21,15 @@ class Cookie:
 
 
 cookies = {}
+no_authorization = False
 
 
 def is_authorized(request):
+	if no_authorization:
+		return 13
+
 	if not 'user' in request.json:
-		return False
+		return None
 
 	user = request.json['user']
 	token = request.cookies.get("auth")
@@ -434,5 +439,21 @@ def auth():
 
 
 if __name__ == '__main__':
-	app.connect('localhost', 'root', '')
-	app.run(debug=True)
+	ap = argparse.ArgumentParser()
+
+	ap.add_argument("--debug", action='store_true', help="Enable flask debug mode")
+	ap.add_argument("--no-authorization", action='store_true', help="Disable authorization")
+	ap.add_argument("--mysql-server", metavar="host", type=str, default="localhost",
+			help="Specify mysql server host")
+
+	ap.add_argument("--mysql-user", metavar="user", type=str, default="mysql",
+			help="Specify mysql user")
+
+	ap.add_argument("--mysql-password", metavar="password", type=str, default="",
+			help="Specify mysql user password")
+
+	args = ap.parse_args()
+	no_authorization = args.no_authorization
+
+	app.connect(args.mysql_server, args.mysql_user, args.mysql_password)
+	app.run(debug=args.debug)

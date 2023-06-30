@@ -20,15 +20,15 @@ class Generator(swanctl.MySql):
 
 
 	def helloworld(self):
-		local_id = self.add_identity(swanctl.ID_KEY_ID, 13)
+		local_id = self.add_identity(swanctl.ID_FQDN, "magnit.ru")
 		remote_id = self.add_identity(swanctl.ID_KEY_ID, 12)
 		secret_id = self.add_shared_secret(self.secret)
 
 		self.add_shared_secret_identity(secret_id, local_id)
 		self.add_shared_secret_identity(secret_id, remote_id)
 
-		ike_id = self.add_ike_config(ipaddress.ip_address("192.168.31.11"),
-				ipaddress.ip_address("0.0.0.0"))
+		ip_zero = ipaddress.ip_address("0.0.0.0")
+		ike_id = self.add_ike_config(ip_zero, ip_zero);
 
 		peer_id = self.add_peer_config("0", ike_id, local_id, remote_id)
 
@@ -36,10 +36,12 @@ class Generator(swanctl.MySql):
 
 		self.add_peer_config_child_config(peer_id, child_id)
 
-		start_addr = ipaddress.ip_address("0.0.0.0")
-		end_addr = ipaddress.ip_address("255.255.255.255")
-		self.add_traffic_selector(child_id, swanctl.TS_LOCAL, start_addr, end_addr)
-		self.add_traffic_selector(child_id, swanctl.TS_REMOTE, start_addr, end_addr)
+		ts = swanctl.TrafficSelector()
+		ts.deserialize("16.0.0.0/8")
+		self.add_traffic_selector(child_id, swanctl.TS_LOCAL, ts.start_addr, ts.end_addr)
+
+		ts.deserialize("48.0.0.0/8")
+		self.add_traffic_selector(child_id, swanctl.TS_REMOTE, ts.start_addr, ts.end_addr)
 
 
 	def big_simple(self, n):
@@ -138,11 +140,9 @@ class Generator(swanctl.MySql):
 def main():
 	gen = Generator()
 	gen.connect()
-#	gen.helloworld()
+	gen.helloworld()
 #	gen.big_simple(100000)
-	gen.real_world(2, 20, 30)
-
-
+#	gen.real_world(2, 20, 30)
 
 
 if __name__ == '__main__':

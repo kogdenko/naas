@@ -1,3 +1,4 @@
+import math
 import ipaddress
 import mysql.connector
 
@@ -18,6 +19,41 @@ def mysql_execute(conn, cmd):
 	except mysql.connector.errors.ProgrammingError as exc:
 		raise RuntimeError("mysql query '%s' failed" % cmd) from exc
 	return c
+
+
+class TrafficSelector:
+	def __init__(self):
+		self.id = None
+
+
+	def deserialize(self, s):
+		splited = s.split('-')
+		if len(splited) == 2:
+			self.start_addr = ipaddress.ip_address(splited[0])
+			self.end_addr = ipaddress.ip_address(splited[1])
+			if int(self.end_addr) < int(self.start_addr):
+				raise ValueError("'%s': does not appear to be an traffic selector" % s)
+		subnet = ipaddress.ip_network(s)
+		self.start_addr = subnet.network_address
+		self.end_addr = subnet.network_address + (subnet.num_addresses - 1)
+
+
+	def __eq__(self, other):
+		return (self.start_addr == other.start_addr and self.end_addr == other.end_addr)
+
+
+	def __str__(self):
+		num_addresses = int(self.end_addr) - int(self.start_addr) + 1
+		n = math.log(num_addresses, 2)
+		if n.is_integer():
+			prefix_len = 32 - int(n)
+			return str(self.start_addr) + "/" + str(prefix_len)
+		else:
+			return str(self.start_addr) + "-" + str(self.end_addr)
+
+
+	def __repr__(self):
+		return self.__str__()
 
 
 class MySql:
@@ -92,10 +128,7 @@ class MySql:
 
 	# ID_FQDN
 	def id_fqdn_2_sql(self, fqdn):
-		data = "X"
-		for x in str.encode(s):
-			data += ("%.2x" % x)
-		return data
+		return "X'%s'" % ''.join("%.2x" % i for i in str.encode(fqdn))
 
 	# ID_IPV4_ADDR
 	def id_ipv4_addr_2_sql(self, ipv4_addr):
@@ -108,7 +141,7 @@ class MySql:
 		elif identity_type == ID_KEY_ID:
 			data =  self.id_key_id_2_sql(identity)
 		elif identity_type == ID_FQDN:
-			data = self.id_ipv4_addr_2_sql(identity)
+			data = self.id_fqdn_2_sql(identity)
 		elif identity_type == ID_IPV4_ADDR:
 			data = self.id_ipv4_addr_2_sql(identity)
 		else:

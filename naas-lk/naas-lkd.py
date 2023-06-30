@@ -1,7 +1,6 @@
 #!/usr/bin/python
 import os
 import sys
-import math
 import ipaddress
 import threading
 import argparse
@@ -15,72 +14,30 @@ from naaspy import swanctl
 
 from flask import Flask, jsonify, abort, request, make_response 
 
+cookies = {}
 
 class Cookie:
 	pass
 
 
-cookies = {}
-no_authorization = False
-
-
-def is_authorized(request):
-	if no_authorization:
-		return 13
-
+def get_authorization_data(request):
 	if not 'user' in request.json:
 		return None
 
 	user = request.json['user']
-	token = request.cookies.get("auth")
-	if not token:
-		return None
 
 	cookie = cookies.get(user)
 	if not cookie:
 		return None
 
-	print(token)
-	print(cookie.tokens)
-	if token in cookie.tokens:
-		return cookie.vrf
-	else:
-		return None
-	
+	if not no_authorization:
+		token = request.cookies.get("auth")
+		if not token:
+			return None
+		if token not in cookie.tokens:
+			return None
 
-class TrafficSelector:
-	def __init__(self):
-		self.id = None
-
-
-	def deserialize(self, s):
-		splited = s.split('-')
-		if len(splited) == 2:
-			self.start_addr = ipaddress.ip_address(splited[0])
-			self.end_addr = ipaddress.ip_address(splited[1])
-			if int(self.end_addr) < int(self.start_addr):
-				raise ValueError("'%s': does not appear to be an traffic selector" % s)
-		subnet = ipaddress.ip_network(s)
-		self.start_addr = subnet.network_address
-		self.end_addr = subnet.network_address + (subnet.num_addresses - 1)
-
-
-	def __eq__(self, other):
-		return (self.start_addr == other.start_addr and self.end_addr == other.end_addr)
-
-
-	def __str__(self):
-		num_addresses = int(self.end_addr) - int(self.start_addr) + 1
-		n = math.log(num_addresses, 2)
-		if n.is_integer():
-			prefix_len = 32 - int(n)
-			return str(self.start_addr) + "/" + str(prefix_len)
-		else:
-			return str(self.start_addr) + "-" + str(self.end_addr)
-
-
-	def __repr__(self):
-		return self.__str__()
+	return cookie
 
 
 def serialize_traffic_selectors(traffic_selectors):
@@ -104,7 +61,7 @@ class Backend(Flask, swanctl.MySql):
 	def connect(self, host, user, password):
 		swanctl.MySql.connect(self, host, user, password)
 		self.auth_db_mysql = mysql.connector.connect(host=host, user=user,
-				password=password, database="auth2")
+				password=password, database="auth")
 
 
 	def auth_execute(self, cmd):
@@ -114,7 +71,7 @@ class Backend(Flask, swanctl.MySql):
 	def create_traffic_selectors(self, list_of_strings):
 		traffic_selectors = []
 		for s in list_of_strings:
-			ts = TrafficSelector()
+			ts = swanctl.TrafficSelector()
 			ts.deserialize(s)
 			traffic_selectors.append(ts)
 		return traffic_selectors
@@ -134,7 +91,7 @@ class Backend(Flask, swanctl.MySql):
 			row = c.fetchone()
 			if row == None:
 				break
-			ts = TrafficSelector()
+			ts = swanctl.TrafficSelector()
 			ts.id = int(row[0])
 			traffic_selectors.append(ts)
 
@@ -226,9 +183,9 @@ class Backend(Flask, swanctl.MySql):
 		return user
 
 
-	def config_mod(self, user_name, vrf, config_name, mobike, secret, local_ts, remote_ts):
-		local_id = self.add_identity(swanctl.ID_ANY, None)
-		remote_id = self.add_identity(swanctl.ID_KEY_ID, vrf)
+	def config_mod(self, user_name, auth, config_name, mobike, secret, local_ts, remote_ts):
+		local_id = self.add_identity(swanctl.ID_FQDN, auth.fqdn)
+		remote_id = self.add_identity(swanctl.ID_KEY_ID, auth.vrf)
 		secret_id = self.add_shared_secret(secret)
 
 		self.add_shared_secret_identity(secret_id, local_id)
@@ -287,6 +244,18 @@ class Backend(Flask, swanctl.MySql):
 		return code
 
 
+	def config_list(self, user_name):
+		user = self.select_user(user_name)
+		if user == None:
+			return 404, {}
+
+		result = []
+		for child_id in user.config_ids:
+			result.append(self.get_child_config_name(child_id))
+
+		return 200, result
+
+
 	def config_get(self, user_name, config_name):
 		user = self.select_user(user_name)
 		if user == None:
@@ -331,8 +300,8 @@ def config_mod():
 	else:
 		mobike = bool(request.json['mobike'])
 
-	vrf = is_authorized(request)
-	if not vrf:
+	auth = get_authorization_data(request)
+	if not auth:
 		return jsonify({}), 401
 
 	user_name = request.json['user']
@@ -346,7 +315,7 @@ def config_mod():
 		abort(400)
 
 	with app.lock:
-		code = app.config_mod(user_name, vrf, config_name, mobike, secret,
+		code = app.config_mod(user_name, auth, config_name, mobike, secret,
 				local_ts, remote_ts)
 
 	return jsonify({}), code
@@ -364,13 +333,31 @@ def config_del():
 	user_name = request.json['user']
 	config_name = request.json['config']
 
-	if not is_authorized(request):
+	if not get_authorization_data(request):
 		return jsonify({}), 401
 
 	with app.lock:
 		code = app.config_del(user_name, config_name)
 
 	return jsonify({}), code
+
+
+@app.route('/api/v1.0/config/list', methods=['GET'])
+def config_list():
+	if not request.json:
+		abort(400)
+	if not 'user' in request.json:
+		abort(400)
+
+	if not get_authorization_data(request):
+		return jsonify({}), 401
+
+	user_name = request.json['user']
+
+	with app.lock:
+		code, data = app.config_list(user_name)
+
+	return jsonify(data), code
 
 
 @app.route('/api/v1.0/config/get', methods=['GET'])
@@ -382,7 +369,7 @@ def config_get():
 	if not 'config' in request.json:
 		abort(400)
 
-	if not is_authorized(request):
+	if not get_authorization_data(request):
 		return jsonify({}), 401
 
 	user_name = request.json['user']
@@ -394,7 +381,7 @@ def config_get():
 	return jsonify(data), code
 
 
-@app.route('/api/v1.0/auth', methods=['GET'])
+@app.route('/api/v1.0/login', methods=['POST'])
 def auth():
 	if not request.json:
 		abort(400)
@@ -407,15 +394,16 @@ def auth():
 	password_md5 = hashlib.md5(request.json['password'].encode())
 	password = ''.join("%.2x" % i for i in password_md5.digest())
 
-	c = app.auth_execute("select password, vrf from user where name = '%s'" % user)
+	c = app.auth_execute("select password, vrf, fqdn from user where name = '%s'" % user)
 	row = c.fetchone()
 	if row == None:
 		abort(401)
 
-	if row[0] != password:
+	if not no_authorization or row[0] != password:
 		abort(401)
 
 	vrf = int(row[1])
+	fqdn = row[2]
 
 	token = ''.join("%.2x" % i for i in secrets.token_bytes(32))
 	resp = make_response()
@@ -425,6 +413,7 @@ def auth():
 		cookie = Cookie()
 		cookie.user = user
 		cookie.vrf = vrf
+		cookie.fqdn = fqdn
 		cookie.tokens = []
 		cookies[user] = cookie
 	else:

@@ -13,13 +13,23 @@ import subprocess
 import argparse
 import mysql.connector
 import nats
-from vpp_papi import VPPApiJSONFiles
-from vpp_papi import vpp_papi
+from syslog  import syslog, LOG_ERR, LOG_INFO
+from vpp_papi import VPPApiJSONFiles, vpp_papi
 
 
 VPP_JSON_DIR = '/usr/share/vpp/api/core/'
 API_FILE_SUFFIX = '*.api.json'
 SR_STEER_IPV4 = 4
+
+
+def print_log(priority, s):
+	syslog(priority, s)
+	print(s)
+
+
+def print_err():
+	print_log(LOG_ERR, traceback.format_exc())
+	print_log(LOG_ERR, sys.exc_info()[2])
 
 
 def argparse_ip_address(s):
@@ -51,7 +61,7 @@ def system(cmd):
 			log += "\n%s" % out
 		if len(err):
 			log += "\n%s" % err
-		print(log)
+		print_log(LOG_INFO, log)
 
 	return rc
 
@@ -65,8 +75,9 @@ def load_json_api_files(json_dir=VPP_JSON_DIR, suffix=API_FILE_SUFFIX):
 
 
 class Server:
-	def connect_vpp(self, jsonfiles):
-		self.vpp = vpp_papi.VPPApiClient(apifiles=jsonfiles)
+	def connect_vpp(self, vpp_api_socket, jsonfiles):
+		self.vpp = vpp_papi.VPPApiClient(apifiles=jsonfiles,
+				server_address=vpp_api_socket)
 		self.vpp.connect("naas-updown-server")
 
 
@@ -192,7 +203,7 @@ class Server:
 
 
 	def __init__(self, args):
-		self.connect_vpp(load_json_api_files())
+		self.connect_vpp(args.vpp_api_socket, load_json_api_files())
 		self.connect_mysql(args.mysql_server, args.mysql_user, args.mysql_password)
 
 		self.nats_server = args.nats_server
@@ -261,8 +272,7 @@ class Server:
 			except nats.errors.TimeoutError:
 				pass
 			except Exception:
-				print(traceback.format_exc())
-				print(sys.exc_info()[2])
+				print_err()
 
 		await nc.close()
 
@@ -281,8 +291,15 @@ if __name__ == '__main__':
 	ap.add_argument("--mysql-password", metavar="password", type=str, default="",
 			help="Specify mysql user password")
 
+	ap.add_argument("--vpp-api-socket", metavar="path", type=str, default="/run/vpp/api.sock",
+			help="Specify VPP api socket")
+
 	args = ap.parse_args()
 
 	server = Server(args)
 
-	asyncio.run(server.start())
+	print_log(LOG_INFO, "Listening incoming messages...")
+	try:
+		asyncio.run(server.start())
+	except Exception as err:
+		print_err(err)

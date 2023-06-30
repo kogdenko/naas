@@ -1,0 +1,14 @@
+{
+	"user": "magnit",
+	"config": "msk",
+	"mobike": false,
+	"secret": "bfe364c58f4b2d9bf08f8a820b6a3f806ad60c5d9ddb58cb",
+	"local_ts": [
+		"10.20.30.0/24",
+		"10.20.40.0/24"
+	],
+	"remote_ts": [
+		"0.0.0.0/0"
+	]
+
+}

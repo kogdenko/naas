@@ -11,26 +11,47 @@ ID_FQDN = 2
 ID_KEY_ID = 11
 
 
+def mysql_execute(conn, cmd):
+	try:
+		c = conn.cursor(buffered = True)
+		c.execute(cmd);
+	except mysql.connector.errors.ProgrammingError as exc:
+		raise RuntimeError("mysql query '%s' failed" % cmd) from exc
+	return c
+
+
 class MySql:
 	def __init__(self):
-		self.mysql_conn = mysql.connector.connect(user="root", database="swanctl")
+		pass
+
+
+	def connect(self, host, user, password):
+		self.swanctl_db_conn = mysql.connector.connect(host=host, user=user,
+				password=password, database="swanctl")
+		# FIXME: implement algorithm to calculate
 		self.id2sql = [ None, "31", "32", "33", "34", "35", "36", "37", "38", "39", # 0-9
 			"3130", "3131", "3132", "3133", "3134", "3135", "3136", "3137", "3138", "3139", #10-19
 			"3230", "3231", "3232", "3233", "3234", "3235", "3236", "3237", "3238", "3239", #20-29
 			]
 
 
-	def execute(self, cmd, *args):
-		try:
-			mysql_cursor = self.mysql_conn.cursor(buffered = True)
-			mysql_cursor.execute(cmd, *args);
-		except mysql.connector.errors.ProgrammingError as exc:
-			raise RuntimeError("mysql query '%s' failed" % cmd) from exc
-		return mysql_cursor
+	def execute(self, cmd):
+		return mysql_execute(self.swanctl_db_conn, cmd)
 
 
 	def commit(self):
-		self.mysql_conn.commit()
+		self.swanctl_db_conn.commit()
+
+
+	def get_shared_secret_by_identity_id(self, identity_id):
+		c = self.execute(("select data from shared_secrets where id > "
+				"(select shared_secret from shared_secret_identity "
+				"where identity = %d LIMIT 1)" % identity_id))
+		row = c.fetchone()
+		if row == None:
+			return None
+		else:
+			return ''.join("%.2x" % i for i in bytes(row[0]))
 
 
 	def add_shared_secret_identity(self, secret_id, identity_id):
@@ -113,9 +134,17 @@ class MySql:
 
 
 	def add_shared_secret(self, secret):
-		c = self.execute("insert into shared_secrets (type, data) values (1, X'%s')" % secret)
-		self.commit()
-		return c.lastrowid
+		c = self.execute("select id from shared_secrets where type = 1 and data = X'%s'"
+				% secret)
+		row = c.fetchone()
+		if row == None:
+			c = self.execute("insert into shared_secrets (type, data) values (1, X'%s')"
+					% secret)
+			self.commit()
+			rowid = c.lastrowid
+		else:
+			rowid = int(row[0])
+		return rowid
 
 
 	def add_peer_config(self, name, ike_id, local_id, remote_id):

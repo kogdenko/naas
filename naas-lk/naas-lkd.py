@@ -24,8 +24,10 @@ def get_authorization_data(request):
 	if not 'user' in request.json:
 		return None
 
-	user = request.json['user']
+	return get_authorization_data_internal(request, request.json['user'])
 
+
+def get_authorization_data_internal(request, user):
 	cookie = cookies.get(user)
 	if not cookie:
 		return None
@@ -344,15 +346,13 @@ def config_del():
 
 @app.route('/api/v1.0/config/list', methods=['GET'])
 def config_list():
-	if not request.json:
-		abort(400)
-	if not 'user' in request.json:
+	if not 'user' in request.args:
 		abort(400)
 
-	if not get_authorization_data(request):
+	if not get_authorization_data_internal(request, request.args['user']):
 		return jsonify({}), 401
 
-	user_name = request.json['user']
+	user_name = request.args['user']
 
 	with app.lock:
 		code, data = app.config_list(user_name)
@@ -362,18 +362,16 @@ def config_list():
 
 @app.route('/api/v1.0/config/get', methods=['GET'])
 def config_get():
-	if not request.json:
+	if not 'user' in request.args:
 		abort(400)
-	if not 'user' in request.json:
-		abort(400)
-	if not 'config' in request.json:
+	if not 'config' in request.args:
 		abort(400)
 
-	if not get_authorization_data(request):
+	if not get_authorization_data_internal(request, request.args['user']):
 		return jsonify({}), 401
 
-	user_name = request.json['user']
-	config_name = request.json['config']
+	user_name = request.args['user']
+	config_name = request.args['config']
 
 	with app.lock:
 		code, data = app.config_get(user_name, config_name)

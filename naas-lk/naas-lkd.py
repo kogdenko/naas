@@ -288,6 +288,10 @@ class Backend(Flask, swanctl.MySql):
 
 app = Backend()
 
+@app.route('/api/v1.0/config/add', methods=['POST'])
+def config_add():
+	return config_mod()
+
 # curl  -i -H "Content-Type: application/json" -X POST -d @config_mod.json 127.0.0.1:5000/api/v1.0/config/mod
 @app.route('/api/v1.0/config/mod', methods=['POST'])
 def config_mod():

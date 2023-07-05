@@ -11,3 +11,7 @@ Add test user:
 
 Using curl to test backend:
 $ curl  -i -H "Content-Type: application/json" -X GET -d @get.json --cookie "auth=7eb..71e2" 127.0.0.1:5000/api/v1.0/config/get
+
+# strongswan
+/usr/local/etc/strongswan.d/swanctl.conf
+

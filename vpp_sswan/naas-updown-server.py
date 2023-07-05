@@ -178,7 +178,7 @@ class Server:
 
 			system("ip link add %s type dummy" % intf)
 			system("ip link set dev %s master VRF%d" % (intf, vrf))
-			system("ip add add %s dev %s" % (prefix, intf));
+			system("ip addr add %s dev %s" % (prefix, intf));
 			system("ip link set dev %s up" % intf);
 
 			if policy_ref_count == None:
@@ -246,7 +246,7 @@ class Server:
 
 	async def process_message(self, msg):
 		data = msg.data.decode("utf-8")
-		print("process: %s: %s" % (msg.subject, data))
+		print_log("process: %s: %s" % (msg.subject, data))
 		args = data.split(' ')
 		if msg.subject == "shutdown":
 			pod = int(args[0])

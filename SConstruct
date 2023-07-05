@@ -168,6 +168,7 @@ def vpp_sswan(env, deps):
 		'-lsvm',
 		'-lvppapiclient',
 		libnaas_ld,
+		'-lnats',
 	]
 
 	env = env.Clone()

@@ -18,7 +18,11 @@
 #include <threading/mutex.h>
 #include <threading/thread.h>
 
+#include <nats/status.h>
+#include <nats/nats.h>
 #include <libnaas/api.h>
+#include <libnaas/strbuf.h>
+
 
 #if 1
 #define MYDBG(...) do { \
@@ -52,6 +56,7 @@ typedef struct kernel_vpp_ipsec {
 	mutex_t *mutex;
 
 	hashtable_t *sas;
+	hashtable_t *tunnels;
 
 	kernel_vpp_listener_t *listener;
 
@@ -62,6 +67,12 @@ typedef struct kernel_vpp_ipsec {
 	thread_t *keepalive;
 
 	stat_client_main_t *sm;
+
+	natsConnection *nats_conn;
+
+	bool rekey_can_update_config;
+	int announce_pod;
+	const char *nats_server;
 } kernel_vpp_ipsec_t;
 
 typedef struct kernel_vpp_child_sa {
@@ -71,12 +82,17 @@ typedef struct kernel_vpp_child_sa {
 	uint32_t unique_id;
 } kernel_vpp_child_sa_t;
 
+typedef struct kernel_vpp_tunnel {
+	uint32_t sw_if_index;
+	linked_list_t *remote_ts;
+} kernel_vpp_tunnel_t;
+
 typedef struct private_kernel_vpp_plugin {
   	kernel_vpp_plugin_t public;
 } private_kernel_vpp_plugin_t;
 
 static u_int
-sa_hash (kernel_ipsec_sa_id_t *sa)
+sa_hash(kernel_ipsec_sa_id_t *sa)
 {
 	return chunk_hash_inc(
 			sa->src->get_address (sa->src),
@@ -87,7 +103,7 @@ sa_hash (kernel_ipsec_sa_id_t *sa)
 }
 
 static bool
-sa_equals (kernel_ipsec_sa_id_t *sa, kernel_ipsec_sa_id_t *other_sa)
+sa_equals(kernel_ipsec_sa_id_t *sa, kernel_ipsec_sa_id_t *other_sa)
 {
 	return sa->src->ip_equals (sa->src, other_sa->src) &&
 			sa->dst->ip_equals (sa->dst, other_sa->dst) &&
@@ -95,7 +111,7 @@ sa_equals (kernel_ipsec_sa_id_t *sa, kernel_ipsec_sa_id_t *other_sa)
 }
 
 static u_int
-permute (u_int x, u_int p)
+permute(u_int x, u_int p)
 {
 	u_int qr;
 
@@ -107,28 +123,129 @@ permute (u_int x, u_int p)
 	return p - qr;
 }
 
-// Initialize seeds for SPI generation
-static bool
-init_spi(kernel_vpp_ipsec_t *this)
+static uint32_t
+get_ts_addr(traffic_selector_t *ts, bool from)
 {
-	bool ok;
-	rng_t *rng;
+	chunk_t chunk;
+	host_t *host;
+	struct sockaddr_in * addr;
 
-	ok = TRUE;
+	if (from) {
+		chunk = ts->get_from_address(ts);
+	} else {
+		chunk = ts->get_to_address(ts);
+	}
+	host = host_create_from_chunk(AF_INET, chunk, 0);
+	addr = (struct sockaddr_in *)host->get_sockaddr(host);
+	return addr->sin_addr.s_addr;
+}
 
-	rng = lib->crypto->create_rng (lib->crypto, RNG_STRONG);
-	if (!rng) {
-		return FALSE;
+static int
+get_ts_net(traffic_selector_t *ts, struct in_addr *prefix, int *prefixlen)
+{
+	uint32_t from, to, num_addresses;
+
+	if (ts->get_type(ts) != TS_IPV4_ADDR_RANGE) {
+		return -EINVAL;
 	}
-	ok = rng->get_bytes (rng, sizeof (this->nextspi), (uint8_t *) &this->nextspi);
-	if (ok) {
-		ok = rng->get_bytes (rng, sizeof (this->mixspi), (uint8_t *) &this->mixspi);
+
+	from = get_ts_addr(ts, true);
+	to = get_ts_addr(ts, false);
+
+	prefix->s_addr = from;
+
+	from = ntohl(from);
+	to = ntohl(to);
+	if (to < from) {
+		return -EINVAL;
 	}
-	rng->destroy (rng);
-	return ok;
+	num_addresses = to - from + 1;
+
+	*prefixlen = 32 - __builtin_ctz(num_addresses);
+	return 0;
 }
 
 static void
+destroy_list_ts(linked_list_t *list_ts)
+{
+	list_ts->destroy_offset(list_ts, offsetof(traffic_selector_t, destroy));
+}
+
+static int
+list_get_count(linked_list_t *list)
+{
+	return list->get_count(list);
+}
+
+static int
+init_nats(kernel_vpp_ipsec_t *this)
+{
+	natsOptions *opts;
+	natsStatus status;
+	const char *servers[1];
+
+	servers[0] = this->nats_server;
+	opts = NULL;
+
+	if (natsOptions_Create(&opts) != NATS_OK) {
+		return -EINVAL;
+	}
+
+	natsOptions_SetServers(opts, servers, 1);
+	status = natsConnection_Connect(&this->nats_conn, opts);
+	natsOptions_Destroy(opts);
+	if (status != NATS_OK) {
+		return -EINVAL;
+	} else {
+		return 0;
+	}
+}
+
+static void
+nats_publish(kernel_vpp_ipsec_t *this, uint32_t unique_id, uint32_t vrf,
+		kernel_vpp_tunnel_t *tunnel)
+{
+	int prefixlen;
+	struct in_addr prefix;
+	struct naas_strbuf sb;
+	traffic_selector_t *ts;
+	enumerator_t *e;
+	char buf[1000];
+
+	naas_strbuf_init(&sb, buf, sizeof(buf));
+
+	naas_strbuf_addf(&sb, "add %u %u %u", unique_id, vrf, this->announce_pod);
+	
+	e = tunnel->remote_ts->create_enumerator(tunnel->remote_ts);
+	while (e->enumerate(e, &ts)) {
+		get_ts_net(ts, &prefix, &prefixlen);
+		naas_strbuf_addf(&sb, " %s/%u", inet_ntoa(prefix), prefixlen);
+	}
+	e->destroy(e);
+	
+	natsConnection_Publish(this->nats_conn, "updown", sb.sb_buf, sb.sb_len);
+}
+
+// Initialize seeds for SPI generation
+static int
+init_spi(kernel_vpp_ipsec_t *this)
+{
+	rng_t *rng;
+	bool ok;
+
+	rng = lib->crypto->create_rng(lib->crypto, RNG_STRONG);
+	if (!rng) {
+		return -EINVAL;
+	}
+	ok = rng->get_bytes(rng, sizeof (this->nextspi), (uint8_t *)&this->nextspi);
+	if (ok) {
+		ok = rng->get_bytes(rng, sizeof (this->mixspi), (uint8_t *)&this->mixspi);
+	}
+	rng->destroy(rng);
+	return ok ? 0 : -EINVAL;
+}
+
+/*static void
 sw_interface_details(void *user, struct naas_api_sw_interface *interface)
 {
 	uint32_t *sw_if_index;
@@ -154,34 +271,76 @@ get_ipsec_sw_if_index(uint32_t instance)
 
 	snprintf(if_name, sizeof(if_name), "ipsec%d", instance);
 	return get_sw_if_index(if_name);
-}
+}*/
 
 static uint32_t
-get_or_create_ipsec(kernel_vpp_ipsec_t *this, ike_sa_t *ike_sa, child_sa_t *child_sa)
+get_other_id(ike_sa_t *ike_sa, child_sa_t *child_sa)
 {
-	uint32_t sw_if_index, unique_id;
+	u_char c;
+	int i;
+	uint32_t id;
 	identification_t* peer_id;
 	host_t *src, *dst;
 	id_type_t peer_id_type;
+	chunk_t chunk;
+
+	peer_id = ike_sa->get_other_id(ike_sa);
+	peer_id_type = peer_id->get_type(peer_id);
+	if (peer_id_type != ID_KEY_ID) {
+		goto err;
+	}
+
+	chunk = peer_id->get_encoding(peer_id);
+	if (chunk.len < 1 || chunk.len > 4) {
+		goto err;
+	}
+
+	// TODO: Find implementation of this algorithm in strongswan and call api
+	id = 0;
+	for (i = 0; i < chunk.len; ++i) {
+		id *= 10;
+		c = chunk.ptr[i];
+		if (c < '0' || c > '9') {
+			goto err;
+		}
+		id += c - '0';
+	}
+
+	return id;
+
+err:
+	src = ike_sa->get_my_host(ike_sa);
+	dst = ike_sa->get_other_host(ike_sa);
+	DBG1(DBG_KNL, "SA_CHILD %#H == %#H with SPI %.8x has invalid peerid type %d",
+			src, dst, child_sa->get_spi(child_sa, TRUE) ,peer_id_type);
+	return ~0;
+}
+
+static uint32_t
+create_ipsec_interface(kernel_vpp_ipsec_t *this, uint32_t unique_id)
+{
+	uint32_t sw_if_index;
+
+	naas_api_ipsec_itf_create(unique_id, &sw_if_index);
+	naas_api_sw_interface_set_unnumbered(1, this->loop_sw_if_index,	sw_if_index);
+	return sw_if_index;
+}
+
+/*
+static uint32_t
+get_or_create_ipsec_interface(kernel_vpp_ipsec_t *this, ike_sa_t *ike_sa, child_sa_t *child_sa)
+{
+	uint32_t sw_if_index, unique_id;
 
 	unique_id = ike_sa->get_unique_id(ike_sa);
 	sw_if_index = get_ipsec_sw_if_index(unique_id);
 	if (sw_if_index == ~0) {
-		peer_id = ike_sa->get_other_id(ike_sa);
-		peer_id_type = peer_id->get_type(peer_id);
-		if (peer_id_type != ID_KEY_ID) {
-			src = ike_sa->get_my_host(ike_sa);
-			dst = ike_sa->get_other_host(ike_sa);
-			DBG1(DBG_KNL, "SA_CHILD %#H == %#H with SPI %.8x has invalid peerid type %d",
-					src, dst, child_sa->get_spi(child_sa, TRUE) ,peer_id_type);
-			return ~0;
-		}
-		naas_api_ipsec_itf_create(unique_id, &sw_if_index);
-		naas_api_sw_interface_set_unnumbered(1, this->loop_sw_if_index,	sw_if_index);
+		sw_if_index = create_ipsec_interface(this, ike_sa, child_sa);
 	}
 
 	return sw_if_index;
 }
+*/
 
 METHOD (kernel_ipsec_t, ipsec_get_features, kernel_feature_t,
 		kernel_vpp_ipsec_t *this)
@@ -214,7 +373,7 @@ typedef struct {
 } vpp_sa_expired_t;
 
 static void
-expire_data_destroy (vpp_sa_expired_t *data)
+expire_data_destroy(vpp_sa_expired_t *data)
 {
 	free(data);
 }
@@ -718,7 +877,7 @@ METHOD (kernel_ipsec_t, flush_sas, status_t, kernel_vpp_ipsec_t *this)
 	status_t rv = FAILED;
 	naas_err_t err;
 
-	this->mutex->lock (this->mutex);
+	this->mutex->lock(this->mutex);
 	enumerator = this->sas->create_enumerator (this->sas);
 	while (enumerator->enumerate(enumerator, &sa)) {
 		memset(&mp, 0, sizeof(mp));
@@ -730,7 +889,7 @@ METHOD (kernel_ipsec_t, flush_sas, status_t, kernel_vpp_ipsec_t *this)
 		naas_api_msg_free(rmp);
 		if (err.num) {
 			if (err.type == NAAS_ERR_ERRNO) {
-				DBG1 (DBG_KNL, "flush_sas failed!!!!");
+				DBG1(DBG_KNL, "flush_sas failed!!!!");
 			} else {
 				DBG1(DBG_KNL, "flush_sas failed!!!! rv: %d", err.num);
 			}
@@ -784,11 +943,18 @@ METHOD (kernel_ipsec_t, enable_udp_decap, bool,
 
 METHOD(kernel_ipsec_t, ipsec_destroy, void, kernel_vpp_ipsec_t *this)
 {
-	charon->bus->remove_listener(charon->bus, &this->listener->public);
-	free(this->listener);
+	if (this->nats_conn != NULL) {
+		natsConnection_Destroy(this->nats_conn);
+		nats_Close();
+	}
+	if (this->listener != NULL) {
+		charon->bus->remove_listener(charon->bus, &this->listener->public);
+		free(this->listener);
+	}
 	this->keepalive->cancel(this->keepalive);
 	this->mutex->destroy(this->mutex);
 	this->sas->destroy(this->sas);
+	this->tunnels->destroy(this->tunnels);
 	if (this->sm) {
 		stat_segment_disconnect_r(this->sm);
 		stat_client_free (this->sm);
@@ -813,6 +979,7 @@ keepalive_fn(kernel_vpp_ipsec_t *this)
 
 METHOD(listener_t, ike_updown, bool, kernel_vpp_listener_t *this, ike_sa_t *ike_sa, bool up) 
 {
+	MYDBG("ike_%s", up ? "up" : "down");
 	return TRUE;
 }
 
@@ -824,12 +991,126 @@ METHOD(listener_t, child_state_change, bool,
 }
 
 static void
+update_routes(int is_add, uint32_t sw_if_index, linked_list_t *remote_ts)
+{
+	int prefixlen;
+	struct in_addr prefix;
+	enumerator_t *e;
+	traffic_selector_t *ts;
+
+	e = remote_ts->create_enumerator(remote_ts);
+	while (e->enumerate(e, &ts)) {
+		get_ts_net(ts, &prefix, &prefixlen);
+		naas_api_ip_route_add_del(is_add, prefix, prefixlen, sw_if_index);
+	}
+	e->destroy(e);
+}
+
+static bool
+tunnel_update_remote_ts(kernel_vpp_tunnel_t *tunnel, linked_list_t *remote_ts_new)
+{
+	bool found, ts_updated;
+	linked_list_t *remote_ts_old, *remote_ts_add;
+	enumerator_t *e_old, *e_new;
+	traffic_selector_t *ts_old, *ts_new;
+
+	remote_ts_old = tunnel->remote_ts;
+	tunnel->remote_ts = remote_ts_new;
+
+	remote_ts_add = linked_list_create();
+
+	e_new = remote_ts_new->create_enumerator(remote_ts_new);
+	e_old = remote_ts_old->create_enumerator(remote_ts_old);
+
+//	MYDBG("set_remote_ts");
+	while (e_new->enumerate(e_new, &ts_new)) {
+//		struct in_addr prefix;
+//		int prefixlen;
+//		get_ts_net(ts_new, &prefix, &prefixlen);
+//		MYDBG("%s/%d", inet_ntoa(prefix), prefixlen);
+
+		found = false;
+		while (e_old->enumerate(e_old, &ts_old)) {
+			if (ts_old->equals(ts_old, ts_new)) {
+				remote_ts_old->remove_at(remote_ts_old, e_old);
+				found = true;
+				break;
+			}
+		}
+		if (!found) {
+			remote_ts_add->insert_last(remote_ts_add, ts_new);
+		}
+		remote_ts_old->reset_enumerator(remote_ts_old, e_old);
+	}
+	e_new->destroy(e_new);
+	e_old->destroy(e_old);
+
+	if (list_get_count(remote_ts_add) || list_get_count(remote_ts_old)) {
+		ts_updated = true;
+		update_routes(1, tunnel->sw_if_index, remote_ts_add);
+		update_routes(0, tunnel->sw_if_index, remote_ts_old);
+	} else {
+		ts_updated = false;
+	}
+
+	destroy_list_ts(remote_ts_old);
+	remote_ts_add->destroy(remote_ts_add);
+
+	return ts_updated;
+}
+
+static void
+tunnel_set_remote_ts(kernel_vpp_tunnel_t *tunnel, linked_list_t *remote_ts_new)
+{
+	tunnel->remote_ts = remote_ts_new;
+	update_routes(1, tunnel->sw_if_index, tunnel->remote_ts);
+}
+
+static void
+kernel_vpp_child_down(kernel_vpp_listener_t *this, ike_sa_t *ike_sa, child_sa_t *child_sa)
+{
+	uintptr_t unique_id;
+	kernel_vpp_tunnel_t *tunnel;
+
+	unique_id = ike_sa->get_unique_id(ike_sa);
+	tunnel = this->ipsec->tunnels->get(this->ipsec->tunnels, (void *)unique_id);
+	if (tunnel == NULL) {
+		return;
+	}
+	this->ipsec->tunnels->remove(this->ipsec->tunnels, (void *)unique_id);
+
+	update_routes(0, tunnel->sw_if_index, tunnel->remote_ts);
+	tunnel->remote_ts->destroy_offset(tunnel->remote_ts,
+			offsetof(traffic_selector_t, destroy));
+	naas_api_ipsec_itf_delete(tunnel->sw_if_index);
+	free(tunnel);
+}
+
+static	linked_list_t *
+get_traffic_selectors(child_sa_t *child_sa, bool is_local)
+{
+	child_cfg_t* cfg;
+
+	cfg = child_sa->get_config(child_sa);
+	return cfg->get_traffic_selectors(cfg, is_local, NULL, NULL, false);
+}
+
+static void
 kernel_vpp_child_up(kernel_vpp_listener_t *this, ike_sa_t *ike_sa, child_sa_t *child_sa)
 {
-	uint32_t unique_id, sw_if_index, i_spi, o_spi;
+	uint32_t sw_if_index, i_spi, o_spi, vrf;
+	uintptr_t unique_id;
+	bool ts_updated;
 	protocol_id_t proto;
+	linked_list_t *remote_ts;
+	kernel_vpp_tunnel_t *tunnel;
 	kernel_ipsec_sa_id_t o_key, i_key;
 	kernel_vpp_child_sa_t *i_sa, *o_sa;
+
+	vrf = get_other_id(ike_sa, child_sa);
+	if (vrf == ~0) {
+		return;
+	}
 
 	proto = child_sa->get_protocol(child_sa);
 
@@ -849,9 +1130,19 @@ kernel_vpp_child_up(kernel_vpp_listener_t *this, ike_sa_t *ike_sa, child_sa_t *c
 	i_key.spi = i_spi;
 	i_sa = this->ipsec->sas->get(this->ipsec->sas, &i_key);
 
-	sw_if_index = get_or_create_ipsec(this->ipsec, ike_sa, child_sa);
-	if (sw_if_index == ~0) {
-		return;
+	unique_id = ike_sa->get_unique_id(ike_sa);
+	tunnel = this->ipsec->tunnels->get(this->ipsec->tunnels, (void *)unique_id);
+	if (tunnel == NULL) {
+		sw_if_index = create_ipsec_interface(this->ipsec, unique_id);
+		if (sw_if_index == ~0) {
+			return;
+		}
+		INIT(tunnel);
+		tunnel->sw_if_index = sw_if_index;
+		tunnel->remote_ts = NULL;
+		this->ipsec->tunnels->put(this->ipsec->tunnels, (void *)unique_id, tunnel);
+	} else {
+		sw_if_index = tunnel->sw_if_index;
 	}
 
 	if (o_sa != NULL && i_sa != NULL) {
@@ -868,14 +1159,27 @@ kernel_vpp_child_up(kernel_vpp_listener_t *this, ike_sa_t *ike_sa, child_sa_t *c
 		o_sa->peer_spi = i_spi;
 		i_sa->peer_spi = o_spi;
 	}
+
+	if (tunnel->remote_ts == NULL) {
+		remote_ts = get_traffic_selectors(child_sa, false);
+		tunnel_set_remote_ts(tunnel, remote_ts);
+		ts_updated = true;
+	} else if (this->ipsec->rekey_can_update_config) {
+		remote_ts = get_traffic_selectors(child_sa, false);
+		ts_updated = tunnel_update_remote_ts(tunnel, remote_ts);
+	} else {
+		ts_updated = false;
+	}
+
+	if (ts_updated) {
+		nats_publish(this->ipsec, unique_id, vrf, tunnel);
+	}
 }
 
 METHOD(listener_t, child_updown, bool,
 		kernel_vpp_listener_t *this, ike_sa_t *ike_sa, child_sa_t *child_sa, bool up)
 {
-	uint32_t /*unique_id,*/ i_spi, o_spi/*, sw_if_index*/;
-
-//	unique_id = ike_sa->get_unique_id(ike_sa);
+	uint32_t i_spi, o_spi;
 
 	i_spi = child_sa->get_spi(child_sa, TRUE);
 	o_spi = child_sa->get_spi(child_sa, FALSE);
@@ -885,11 +1189,7 @@ METHOD(listener_t, child_updown, bool,
 	if (up) {
 		kernel_vpp_child_up(this, ike_sa, child_sa);
 	} else {
-/*		sw_if_index = get_ipsec_sw_if_index(unique_id);
-		if (sw_if_index != ~0) {
-			printf("DELETE!!!!!\n");
-			naas_api_ipsec_itf_delete(sw_if_index);
-		}*/
+		kernel_vpp_child_down(this, ike_sa, child_sa);
 	}
 
 	return TRUE;
@@ -962,18 +1262,37 @@ kernel_vpp_ipsec_create()
 		.mutex = mutex_create(MUTEX_TYPE_DEFAULT),
 		.sas = hashtable_create((hashtable_hash_t)sa_hash,
 					(hashtable_equals_t)sa_equals, 32),
+		.tunnels = hashtable_create(hashtable_hash_ptr, hashtable_equals_ptr, 4),
 		.sm = NULL,
+		.rekey_can_update_config = lib->settings->get_bool(lib->settings,
+			"%s.plugins.kernel-vpp.rekey_can_update_config", false, lib->ns),
+		.announce_pod = lib->settings->get_int(lib->settings,
+			"%s.plugins.kernel-vpp.announce_pod", 0, lib->ns),
+		.nats_server = lib->settings->get_str(lib->settings,
+			"%s.plugins.kernel-vpp.nats_server", "localhost", lib->ns),
 	);
 
+	printf("nats_server %s -- %d\n", this->nats_server, this->announce_pod  );
+	this->listener = NULL;
+	this->nats_conn = NULL;
 	this->keepalive = thread_create((thread_main_t)keepalive_fn, this);
 
-	if (!init_spi (this)) {
-		ipsec_destroy (this);
+	if (init_spi(this)) {
+		DBG1(DBG_KNL, "failed to initialize spis");
+		ipsec_destroy(this);
+		return NULL;
+	}
+
+	if (init_nats(this)) {
+		DBG1(DBG_KNL, "connection to nats failed");
+		ipsec_destroy(this);
 		return NULL;
 	}
 
 	this->listener = kernel_vpp_listener_create(this);
 	charon->bus->add_listener(charon->bus, &this->listener->public);
+
+	DBG1(DBG_KNL, "kernel-vpp initialized");
 
 	return this;
 }

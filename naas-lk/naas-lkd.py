@@ -247,15 +247,17 @@ class Backend(Flask, swanctl.MySql):
 
 
 	def config_list(self, user_name):
+		cfg_list = []
 		user = self.select_user(user_name)
-		if user == None:
-			return 404, {}
+		if user != None:
+			for child_id in user.config_ids:
+				cfg_list.append(self.get_child_config_name(child_id))
 
-		result = []
-		for child_id in user.config_ids:
-			result.append(self.get_child_config_name(child_id))
-
-		return 200, result
+		o = {
+			"user": user_name,
+			"sites": cfg_list,
+		}
+		return 200, o
 
 
 	def config_get(self, user_name, config_name):

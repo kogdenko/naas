@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<link rel="stylesheet" href="/style.css">
+	<script type="text/javascript" src="/script.js"></script>
+	<title>Редактировать сайт</title>
+</head>
+
+<body>
+<h1>Редактировать сайт</h1>
+
+<div>
+	<p>Имя сайта</p>
+	<input type="text" id="site_name" disabled>
+
+	<p><input type="checkbox" id="mobike">Поддержка Mobike</p>
+
+	<p>Ключ аутентификации</p>
+	<input type="text" id="auth_key">
+
+	<p>Локальные префиксы (через запятую)</p>
+	<input type="text" id="local_prefixes" size="80">
+
+	<p>Дистанционные префиксы (через запятую)</p>
+	<input type="text" id="remote_prefixes" size="80">
+</div>
+<hr>
+<button id="site_add">Применить</button>
+<hr>
+<div id="status" style="color:red;"></div>
+
+<script type="text/javascript">
+
+var site;
+
+j_id("site_add").onclick = function() {
+	const req = {
+		"user":			site.user,
+		"config":		site.config,
+		"mobike":		j_id("mobike").checked,
+		"secret":		j_id("auth_key").value,
+		"local_ts":		j_id("local_prefixes").value.split(","),
+		"remote_ts":	j_id("remote_prefixes").value.split(","),
+	};
+	j_request("POST", "/api/v1.0/config/mod", req, function() {
+		if (this.status != 200) {
+			j_id("status").innerHTML = j_format("%s %s: %s"
+				, String(this.status), this.statusText, this.responseText);
+			return;
+		}
+		j_id("status").innerHTML = "ОТРЕДАКТИРОВАНО!";
+	});
+};
+
+function info_show() {
+	j_id("site_name").value = site.config;
+	j_id("mobike").checked = site.mobike;
+	j_id("auth_key").value = site.secret;
+	j_id("local_prefixes").value = String(site.local_ts);
+	j_id("remote_prefixes").value = String(site.remote_ts);
+}
+
+const qs = document.URL.split("?")[1];
+j_request("GET", "/api/v1.0/config/get?" + qs, null, function() {
+	if (this.status != 200) {
+		j_id("status").innerHTML = j_format("%s %s: %s"
+			, String(this.status), this.statusText, this.responseText);
+		return;
+	}
+	site = JSON.parse(this.responseText);
+	info_show();
+});
+
+// site = {
+// 	"user": "client_id",
+// 	"config": "site_name",
+// 	"mobike": true,
+// 	"secret": "auth_key",
+// 	"local_ts": ["1","2","3"],
+// 	"remote_ts": ["1","2","3"],
+// };
+// info_show();
+
+</script>
+</body>
+</html>

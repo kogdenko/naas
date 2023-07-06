@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<link rel="stylesheet" href="/style.css">
+	<script type="text/javascript" src="/script.js"></script>
+	<title>Добавить сайт</title>
+</head>
+
+<body>
+<h1>Добавить сайт</h1>
+
+<div>
+	<p>Имя сайта</p>
+	<input type="text" id="site_name">
+
+	<p><input type="checkbox" id="mobike">Поддержка Mobike</p>
+
+	<p>Ключ аутентификации</p>
+	<input type="text" id="auth_key">
+
+	<p>Локальные префиксы (через запятую)</p>
+	<input type="text" id="local_prefixes" size="80">
+
+	<p>Дистанционные префиксы (через запятую)</p>
+	<input type="text" id="remote_prefixes" size="80">
+</div>
+<hr>
+<button id="site_add">Добавить</button>
+<hr>
+<div id="status" style="color:red;"></div>
+
+<script type="text/javascript">
+
+const qs = document.URL.split("?")[1];
+var config = {
+	"user": qs.split("=")[1],
+};
+
+j_id("site_add").onclick = function() {
+	const req = {
+		"user":			config.user,
+		"config":		j_id("site_name").value,
+		"mobike":		j_id("mobike").checked,
+		"secret":		j_id("auth_key").value,
+		"local_ts":		j_id("local_prefixes").value.split(","),
+		"remote_ts":	j_id("remote_prefixes").value.split(","),
+	};
+	j_request("POST", "/api/v1.0/config/add", req, function() {
+		if (this.status != 200) {
+			j_id("status").innerHTML = j_format("%s %s: %s"
+				, String(this.status), this.statusText, this.responseText);
+			return;
+		}
+		j_id("status").innerHTML = "ДОБАВЛЕНО!";
+	});
+};
+
+function info_show() {
+	j_id("client_id").innerHTML = config.user;
+}
+
+</script>
+</body>
+</html>

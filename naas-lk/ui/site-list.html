@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<link rel="stylesheet" href="/style.css">
+	<script type="text/javascript" src="/script.js"></script>
+	<title>Общая конфигурация</title>
+</head>
+
+<body>
+<h1>Общая конфигурация</h1>
+
+<p>Идентификатор клиента: <span id="client_id"></span></p>
+
+<p>Список сайтов:</p>
+<div id="site_list">
+</div>
+<div>
+	<button id="site_add">Добавить...</button>
+	<button id="site_edit">Редактировать...</button>
+	<button id="site_del">Удалить</button>
+</div>
+<hr>
+<div id="status" style="color:red;"></div>
+
+<script type="text/javascript">
+
+var config;
+
+j_id("site_add").onclick = function() {
+	document.location = "/site-add.html?user=" + config.user;
+}
+
+function site_selected() {
+	const radio = document.querySelector('input[name="radio_site"]:checked');
+	if (radio == null) {
+		j_id("status").innerHTML = "Please select site";
+		throw "";
+	}
+	return config.sites[Number(radio.value)];
+}
+
+j_id("site_edit").onclick = function() {
+	document.location = j_format("/site-edit.html?user=%s&config=%s"
+		, config.user, site_selected());
+};
+
+j_id("site_del").onclick = function() {
+	const req = {
+		"user": config.user,
+		"config": site_selected(),
+	};
+	j_request("POST", "/api/v1.0/config/del", req, function() {
+		if (this.status != 200) {
+			j_id("status").innerHTML = j_format("%s %s: %s"
+				, String(this.status), this.statusText, this.responseText);
+			return;
+		}
+		j_id("status").innerHTML = "УДАЛЕНО!";
+		get_list();
+	});
+};
+
+function info_show() {
+	j_id("client_id").innerHTML = config.user;
+
+	let s = "";
+	let i = 0;
+	for (const it of config.sites) {
+		s += j_format("<div><input type='radio' name='radio_site' value='%s'>%s</div>"
+			, String(i), it);
+		i++;
+	}
+	j_id("site_list").innerHTML = s;
+}
+
+function get_list() {
+	const qs = document.URL.split("?")[1];
+	j_request("GET", "/api/v1.0/config/list?" + qs, null, function() {
+		if (this.status != 200) {
+			j_id("status").innerHTML = j_format("%s %s: %s"
+				, String(this.status), this.statusText, this.responseText);
+			return;
+		}
+		config = JSON.parse(this.responseText);
+		info_show();
+	});
+}
+
+get_list();
+
+// config = {
+// 	"user": "client_id",
+// 	"sites": [
+// 		"site1",
+// 		"site2"
+// 	],
+// };
+// info_show();
+
+</script>
+</body>
+</html>

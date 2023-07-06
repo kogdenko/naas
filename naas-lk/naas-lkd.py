@@ -24,8 +24,10 @@ def get_authorization_data(request):
 	if not 'user' in request.json:
 		return None
 
-	user = request.json['user']
+	return get_authorization_data_internal(request, request.json['user'])
 
+
+def get_authorization_data_internal(request, user):
 	cookie = cookies.get(user)
 	if not cookie:
 		return None
@@ -245,15 +247,17 @@ class Backend(Flask, swanctl.MySql):
 
 
 	def config_list(self, user_name):
+		cfg_list = []
 		user = self.select_user(user_name)
-		if user == None:
-			return 404, {}
+		if user != None:
+			for child_id in user.config_ids:
+				cfg_list.append(self.get_child_config_name(child_id))
 
-		result = []
-		for child_id in user.config_ids:
-			result.append(self.get_child_config_name(child_id))
-
-		return 200, result
+		o = {
+			"user": user_name,
+			"sites": cfg_list,
+		}
+		return 200, o
 
 
 	def config_get(self, user_name, config_name):
@@ -285,6 +289,10 @@ class Backend(Flask, swanctl.MySql):
 		return 200, result
 
 app = Backend()
+
+@app.route('/api/v1.0/config/add', methods=['POST'])
+def config_add():
+	return config_mod()
 
 # curl  -i -H "Content-Type: application/json" -X POST -d @config_mod.json 127.0.0.1:5000/api/v1.0/config/mod
 @app.route('/api/v1.0/config/mod', methods=['POST'])
@@ -344,15 +352,13 @@ def config_del():
 
 @app.route('/api/v1.0/config/list', methods=['GET'])
 def config_list():
-	if not request.json:
-		abort(400)
-	if not 'user' in request.json:
+	if not 'user' in request.args:
 		abort(400)
 
-	if not get_authorization_data(request):
+	if not get_authorization_data_internal(request, request.args['user']):
 		return jsonify({}), 401
 
-	user_name = request.json['user']
+	user_name = request.args['user']
 
 	with app.lock:
 		code, data = app.config_list(user_name)
@@ -362,18 +368,16 @@ def config_list():
 
 @app.route('/api/v1.0/config/get', methods=['GET'])
 def config_get():
-	if not request.json:
+	if not 'user' in request.args:
 		abort(400)
-	if not 'user' in request.json:
-		abort(400)
-	if not 'config' in request.json:
+	if not 'config' in request.args:
 		abort(400)
 
-	if not get_authorization_data(request):
+	if not get_authorization_data_internal(request, request.args['user']):
 		return jsonify({}), 401
 
-	user_name = request.json['user']
-	config_name = request.json['config']
+	user_name = request.args['user']
+	config_name = request.args['config']
 
 	with app.lock:
 		code, data = app.config_get(user_name, config_name)
@@ -397,9 +401,11 @@ def auth():
 	c = app.auth_execute("select password, vrf, fqdn from user where name = '%s'" % user)
 	row = c.fetchone()
 	if row == None:
+		print('ERROR  row == None')
 		abort(401)
 
-	if not no_authorization or row[0] != password:
+	if not no_authorization and row[0] != password:
+		print('ERROR  row[0] != password: %s %s' % (row[0], password))
 		abort(401)
 
 	vrf = int(row[1])

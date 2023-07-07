@@ -225,10 +225,13 @@ def build_deb(env):
 #		("etc/naas/kernel-vpp.conf", "#vpp_sswan/kernel-vpp.conf"),
 		("usr/lib/ipsec/plugins/libstrongswan-kernel-vpp.so", "#bin/libstrongswan-kernel-vpp.so"),
 		("usr/local/lib/ipsec/plugins/libstrongswan-kernel-vpp.so", "#bin/libstrongswan-kernel-vpp.so"),
-		("lib/systemd/system/naas-keeper.service", "vpp_sswan/naas-keeper.service"),
-		("usr/local/bin/naas-keeper.sh", "vpp_sswan/naas-keeper.sh"),
-		("usr/local/bin/naas-updown.sh", "vpp_sswan/naas-updown.sh"),
-		("usr/local/bin/naas-updown-server", "dist/naas-updown-server"),
+		("lib/systemd/system/naas-keeper.service", "#vpp_sswan/naas-keeper.service"),
+		("usr/local/bin/naas-keeper.sh", "#vpp_sswan/naas-keeper.sh"),
+		("usr/local/bin/naas-updown.sh", "#vpp_sswan/naas-updown.sh"),
+		("usr/local/bin/naas-updown-server", "#dist/naas-updown-server"),
+		("usr/local/bin/naas-updown-server.py", "#vpp_sswan/naas-updown-server.py"),
+		("usr/local/bin/naas-lkd.py", "#naas-lk/naas-lkd.py"),
+
 	]
 
 	debpkg = '#%s_%s_%s.deb' % (DEBNAME, git_version, DEBARCH)

@@ -21,6 +21,13 @@ def mysql_execute(conn, cmd):
 	return c
 
 
+def id2sql(d):
+	res = ""
+	for i in str(d):
+		res += "%x" % ord(i)
+	return res
+
+
 class TrafficSelector:
 	def __init__(self):
 		self.id = None
@@ -57,17 +64,9 @@ class TrafficSelector:
 
 
 class MySql:
-	def __init__(self):
-		self.id2sql = [ None, "31", "32", "33", "34", "35", "36", "37", "38", "39", # 0-9
-			"3130", "3131", "3132", "3133", "3134", "3135", "3136", "3137", "3138", "3139", #10-19
-			"3230", "3231", "3232", "3233", "3234", "3235", "3236", "3237", "3238", "3239", #20-29
-			]
-
-
 	def connect(self, host='localhost', user='root', password=''):
 		self.swanctl_db_conn = mysql.connector.connect(host=host, user=user,
 				password=password, database="swanctl")
-		# FIXME: implement algorithm to calculate
 
 
 	def execute(self, cmd):
@@ -123,7 +122,7 @@ class MySql:
 
 	# ID_KEY_ID
 	def id_key_id_2_sql(self, key_id):
-		return ("X'%s'" % self.id2sql[key_id])
+		return ("X'%s'" % id2sql(key_id))
 
 
 	# ID_FQDN

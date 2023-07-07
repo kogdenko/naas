@@ -401,12 +401,11 @@ def auth():
 	c = app.auth_execute("select password, vrf, fqdn from user where name = '%s'" % user)
 	row = c.fetchone()
 	if row == None:
-		print('ERROR  row == None')
 		abort(401)
 
-	if not no_authorization and row[0] != password:
-		print('ERROR  row[0] != password: %s %s' % (row[0], password))
-		abort(401)
+	if not no_authorization:
+		if row[0] != password:
+			abort(401)
 
 	vrf = int(row[1])
 	fqdn = row[2]

@@ -1,10 +1,9 @@
 # naas-lk
 
-Prepare mysql database
-sswan config database:
+Prepare mysql database:
+$ mysql -u root -e 'drop database swanctl'
+$ mysql -u root -e 'create database swanctl'
 $ mysql -u root swanctl < ./sswan/src/pool/mysql.sql
-
-auth database:
 $ mysql -u root auth < ./naas-lk/auth.sql
 
 Add test user:

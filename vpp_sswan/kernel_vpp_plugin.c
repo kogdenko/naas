@@ -21,7 +21,6 @@
 #include <nats/status.h>
 #include <nats/nats.h>
 #include <libnaas/api.h>
-#include <libnaas/strbuf.h>
 
 
 #if 1
@@ -80,10 +79,12 @@ typedef struct kernel_vpp_child_sa {
 	uint32_t stat_index;
 	uint32_t peer_spi;
 	uint32_t unique_id;
+	uint32_t vrf;
 } kernel_vpp_child_sa_t;
 
 typedef struct kernel_vpp_tunnel {
 	uint32_t sw_if_index;
+	uint32_t vrf;
 	linked_list_t *remote_ts;
 } kernel_vpp_tunnel_t;
 
@@ -202,28 +203,23 @@ init_nats(kernel_vpp_ipsec_t *this)
 }
 
 static void
-nats_publish(kernel_vpp_ipsec_t *this, uint32_t unique_id, uint32_t vrf,
-		kernel_vpp_tunnel_t *tunnel)
+nats_publish(kernel_vpp_ipsec_t *this, int is_up, uint32_t vrf, uint32_t unique_id,
+		struct in_addr prefix, int prefixlen)
 {
-	int prefixlen;
-	struct in_addr prefix;
-	struct naas_strbuf sb;
-	traffic_selector_t *ts;
-	enumerator_t *e;
-	char buf[1000];
-
-	naas_strbuf_init(&sb, buf, sizeof(buf));
-
-	naas_strbuf_addf(&sb, "add %u %u %u", unique_id, vrf, this->announce_pod);
+	const char *subj;
+	char buf[128];
+	int len;
 	
-	e = tunnel->remote_ts->create_enumerator(tunnel->remote_ts);
-	while (e->enumerate(e, &ts)) {
-		get_ts_net(ts, &prefix, &prefixlen);
-		naas_strbuf_addf(&sb, " %s/%u", inet_ntoa(prefix), prefixlen);
+	len = snprintf(buf, sizeof(buf), "%u %u %u %s/%u", this->announce_pod, vrf, unique_id,
+			inet_ntoa(prefix), prefixlen);
+
+	if (is_up) {
+		subj = "tunnel-up";
+	} else {
+		subj = "tunnel-down";
 	}
-	e->destroy(e);
-	
-	natsConnection_Publish(this->nats_conn, "updown", sb.sb_buf, sb.sb_len);
+
+	natsConnection_Publish(this->nats_conn, subj, buf, len);
 }
 
 // Initialize seeds for SPI generation
@@ -991,7 +987,8 @@ METHOD(listener_t, child_state_change, bool,
 }
 
 static void
-update_routes(int is_add, uint32_t sw_if_index, linked_list_t *remote_ts)
+update_routes(struct kernel_vpp_ipsec *ipsec, int is_add, uint32_t sw_if_index,
+		uint32_t vrf, uint32_t unique_id, linked_list_t *remote_ts)
 {
 	int prefixlen;
 	struct in_addr prefix;
@@ -1002,14 +999,16 @@ update_routes(int is_add, uint32_t sw_if_index, linked_list_t *remote_ts)
 	while (e->enumerate(e, &ts)) {
 		get_ts_net(ts, &prefix, &prefixlen);
 		naas_api_ip_route_add_del(is_add, prefix, prefixlen, sw_if_index);
+		nats_publish(ipsec, is_add, vrf, unique_id, prefix, prefixlen);
 	}
 	e->destroy(e);
 }
 
-static bool
-tunnel_update_remote_ts(kernel_vpp_tunnel_t *tunnel, linked_list_t *remote_ts_new)
+static void
+tunnel_update_remote_ts(struct kernel_vpp_ipsec *ipsec, kernel_vpp_tunnel_t *tunnel,
+		uint32_t vrf, uint32_t unique_id, linked_list_t *remote_ts_new)
 {
-	bool found, ts_updated;
+	bool found;
 	linked_list_t *remote_ts_old, *remote_ts_add;
 	enumerator_t *e_old, *e_new;
 	traffic_selector_t *ts_old, *ts_new;
@@ -1046,29 +1045,26 @@ tunnel_update_remote_ts(kernel_vpp_tunnel_t *tunnel, linked_list_t *remote_ts_ne
 	e_old->destroy(e_old);
 
 	if (list_get_count(remote_ts_add) || list_get_count(remote_ts_old)) {
-		ts_updated = true;
-		update_routes(1, tunnel->sw_if_index, remote_ts_add);
-		update_routes(0, tunnel->sw_if_index, remote_ts_old);
-	} else {
-		ts_updated = false;
+		update_routes(ipsec, 1, tunnel->sw_if_index, vrf, unique_id, remote_ts_add);
+		update_routes(ipsec, 0, tunnel->sw_if_index, vrf, unique_id, remote_ts_old);
 	}
 
 	destroy_list_ts(remote_ts_old);
 	remote_ts_add->destroy(remote_ts_add);
-
-	return ts_updated;
 }
 
 static void
-tunnel_set_remote_ts(kernel_vpp_tunnel_t *tunnel, linked_list_t *remote_ts_new)
+tunnel_set_remote_ts(struct kernel_vpp_ipsec *ipsec, kernel_vpp_tunnel_t *tunnel,
+		uint32_t vrf, uint32_t unique_id, linked_list_t *remote_ts_new)
 {
 	tunnel->remote_ts = remote_ts_new;
-	update_routes(1, tunnel->sw_if_index, tunnel->remote_ts);
+	update_routes(ipsec, 1, tunnel->sw_if_index, vrf, unique_id, tunnel->remote_ts);
 }
 
 static void
 kernel_vpp_child_down(kernel_vpp_listener_t *this, ike_sa_t *ike_sa, child_sa_t *child_sa)
 {
+	uint32_t vrf;
 	uintptr_t unique_id;
 	kernel_vpp_tunnel_t *tunnel;
 
@@ -1077,9 +1073,10 @@ kernel_vpp_child_down(kernel_vpp_listener_t *this, ike_sa_t *ike_sa, child_sa_t 
 	if (tunnel == NULL) {
 		return;
 	}
+	vrf = tunnel->vrf;
 	this->ipsec->tunnels->remove(this->ipsec->tunnels, (void *)unique_id);
 
-	update_routes(0, tunnel->sw_if_index, tunnel->remote_ts);
+	update_routes(this->ipsec, 0, tunnel->sw_if_index, vrf, unique_id, tunnel->remote_ts);
 	tunnel->remote_ts->destroy_offset(tunnel->remote_ts,
 			offsetof(traffic_selector_t, destroy));
 	naas_api_ipsec_itf_delete(tunnel->sw_if_index);
@@ -1100,7 +1097,6 @@ kernel_vpp_child_up(kernel_vpp_listener_t *this, ike_sa_t *ike_sa, child_sa_t *c
 {
 	uint32_t sw_if_index, i_spi, o_spi, vrf;
 	uintptr_t unique_id;
-	bool ts_updated;
 	protocol_id_t proto;
 	linked_list_t *remote_ts;
 	kernel_vpp_tunnel_t *tunnel;
@@ -1140,6 +1136,7 @@ kernel_vpp_child_up(kernel_vpp_listener_t *this, ike_sa_t *ike_sa, child_sa_t *c
 		INIT(tunnel);
 		tunnel->sw_if_index = sw_if_index;
 		tunnel->remote_ts = NULL;
+		tunnel->vrf = vrf;
 		this->ipsec->tunnels->put(this->ipsec->tunnels, (void *)unique_id, tunnel);
 	} else {
 		sw_if_index = tunnel->sw_if_index;
@@ -1162,17 +1159,10 @@ kernel_vpp_child_up(kernel_vpp_listener_t *this, ike_sa_t *ike_sa, child_sa_t *c
 
 	if (tunnel->remote_ts == NULL) {
 		remote_ts = get_traffic_selectors(child_sa, false);
-		tunnel_set_remote_ts(tunnel, remote_ts);
-		ts_updated = true;
+		tunnel_set_remote_ts(this->ipsec, tunnel, vrf, unique_id, remote_ts);
 	} else if (this->ipsec->rekey_can_update_config) {
 		remote_ts = get_traffic_selectors(child_sa, false);
-		ts_updated = tunnel_update_remote_ts(tunnel, remote_ts);
-	} else {
-		ts_updated = false;
-	}
-
-	if (ts_updated) {
-		nats_publish(this->ipsec, unique_id, vrf, tunnel);
+		tunnel_update_remote_ts(this->ipsec, tunnel, vrf, unique_id, remote_ts);
 	}
 }
 
@@ -1272,7 +1262,6 @@ kernel_vpp_ipsec_create()
 			"%s.plugins.kernel-vpp.nats_server", "localhost", lib->ns),
 	);
 
-	printf("nats_server %s -- %d\n", this->nats_server, this->announce_pod  );
 	this->listener = NULL;
 	this->nats_conn = NULL;
 	this->keepalive = thread_create((thread_main_t)keepalive_fn, this);

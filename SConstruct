@@ -184,12 +184,12 @@ def build_deb(env):
 	global git_version
 
 	system("pyinstaller -y -F vpp_sswan/naas-updown-server.py")
+	system("pyinstaller -y -F naas-lk/naas-lkd.py  naaspy/swanctl.py")
 
 	DEBNAME = "naas"
 	DEBVERSION = git_version
 	DEBMAINT = "Konstantin Kogdenko <k.kogdenko@gmail.com>"
 	DEBARCH = "amd64"
-	#DEBDEPENDS = "vpp, vpp-dev, libvppinfra, libvppinfra-dev, libstrongswan, strongswan-swanctl"
 	DEBDEPENDS = ""
 	DEBDESC = "MTS Naas Package"
 
@@ -230,9 +230,7 @@ def build_deb(env):
 		("usr/local/bin/naas-keeper.sh", "#vpp_sswan/naas-keeper.sh"),
 		("usr/local/bin/naas-updown.sh", "#vpp_sswan/naas-updown.sh"),
 		("usr/local/bin/naas-updown-server", "#dist/naas-updown-server"),
-		("usr/local/bin/naas-updown-server.py", "#vpp_sswan/naas-updown-server.py"),
-		("usr/local/bin/naas-lkd.py", "#naas-lk/naas-lkd.py"),
-
+		("usr/local/bin/naas-lkd", "#dist/naas-lkd"),
 	]
 
 	debpkg = '#%s_%s_%s.deb' % (DEBNAME, git_version, DEBARCH)

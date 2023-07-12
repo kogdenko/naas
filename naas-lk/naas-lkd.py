@@ -16,30 +16,39 @@ from flask import Flask, jsonify, abort, request, make_response
 
 cookies = {}
 
+
 class Cookie:
 	pass
 
 
-def get_authorization_data(request):
-	if not 'user' in request.json:
-		return None
-
-	return get_authorization_data_internal(request, request.json['user'])
+class AuthData:
+	pass
 
 
-def get_authorization_data_internal(request, user):
-	cookie = cookies.get(user)
-	if not cookie:
-		return None
+def is_authoraized(request, user):
+	if no_authorization:
+		return True
+	else:
+		cookie = cookies.get(user)
+		if not cookie:
+			return False
 
-	if not no_authorization:
 		token = request.cookies.get("auth")
 		if not token:
-			return None
-		if token not in cookie.tokens:
-			return None
+			return False
+		return token not in cookie.tokens
 
-	return cookie
+
+def get_authorization_data(user):
+	c = app.auth_execute("select vrf, fqdn from user where name = '%s'" % user)
+	rows = c.fetchone()
+	if rows == None:
+		abort(401)
+
+	auth = AuthData()
+	auth.vrf = int(rows[0])
+	auth.fqdn = rows[1]
+	return auth
 
 
 def serialize_traffic_selectors(traffic_selectors):
@@ -270,7 +279,7 @@ class Backend(Flask, swanctl.MySql):
 			if config_name == self.get_child_config_name(child_id):
 				config_id = child_id
 		if not config_id:
-			return 404
+			return 404, {}
 
 		local_ts = self.get_traffic_selectors(config_id, swanctl.TS_LOCAL)
 		remote_ts = self.get_traffic_selectors(config_id, swanctl.TS_REMOTE)
@@ -294,7 +303,7 @@ app = Backend()
 def config_add():
 	return config_mod()
 
-# curl  -i -H "Content-Type: application/json" -X POST -d @config_mod.json 127.0.0.1:5000/api/v1.0/config/mod
+# curl  -i -H "Content-Type: application/json" -X POST -d @naas-lk/mod.json 127.0.0.1:5000/api/v1.0/config/mod
 @app.route('/api/v1.0/config/mod', methods=['POST'])
 def config_mod():
 	if not request.json:
@@ -308,13 +317,21 @@ def config_mod():
 	else:
 		mobike = bool(request.json['mobike'])
 
-	auth = get_authorization_data(request)
-	if not auth:
+	user_name = request.json['user']
+
+	if not is_authoraized(request, user_name):
 		return jsonify({}), 401
 
-	user_name = request.json['user']
+	auth = get_authorization_data(user_name)
+
 	config_name = request.json['config']
+
 	secret = request.json['secret']
+	try:
+		int(secret, 16)
+	except:
+		abort(400)
+
 	local_ts = app.create_traffic_selectors(request.json['local_ts'])
 	if not len(local_ts):
 		abort(400)
@@ -341,7 +358,7 @@ def config_del():
 	user_name = request.json['user']
 	config_name = request.json['config']
 
-	if not get_authorization_data(request):
+	if not is_authoraized(request, user_name):
 		return jsonify({}), 401
 
 	with app.lock:
@@ -355,7 +372,7 @@ def config_list():
 	if not 'user' in request.args:
 		abort(400)
 
-	if not get_authorization_data_internal(request, request.args['user']):
+	if not is_authoraized(request, user_name):
 		return jsonify({}), 401
 
 	user_name = request.args['user']
@@ -366,6 +383,7 @@ def config_list():
 	return jsonify(data), code
 
 
+# curl -i -X GET --cookie "auth=..." "127.0.0.1:5000/api/v1.0/config/get?user=magnit&config=msk"
 @app.route('/api/v1.0/config/get', methods=['GET'])
 def config_get():
 	if not 'user' in request.args:
@@ -373,11 +391,11 @@ def config_get():
 	if not 'config' in request.args:
 		abort(400)
 
-	if not get_authorization_data_internal(request, request.args['user']):
-		return jsonify({}), 401
-
 	user_name = request.args['user']
 	config_name = request.args['config']
+
+	if not is_authoraized(request, user_name):
+		return jsonify({}), 401
 
 	with app.lock:
 		code, data = app.config_get(user_name, config_name)
@@ -385,6 +403,7 @@ def config_get():
 	return jsonify(data), code
 
 
+# curl -i -H "Content-Type: application/json" -X POST -d @naas-lk/login.json 127.0.0.1:5000/api/v1.0/login
 @app.route('/api/v1.0/login', methods=['POST'])
 def auth():
 	if not request.json:
@@ -398,17 +417,13 @@ def auth():
 	password_md5 = hashlib.md5(request.json['password'].encode())
 	password = ''.join("%.2x" % i for i in password_md5.digest())
 
-	c = app.auth_execute("select password, vrf, fqdn from user where name = '%s'" % user)
-	row = c.fetchone()
-	if row == None:
+	c = app.auth_execute("select password from user where name = '%s'" % user)
+	rows = c.fetchone()
+	if rows == None:
 		abort(401)
 
-	if not no_authorization:
-		if row[0] != password:
-			abort(401)
-
-	vrf = int(row[1])
-	fqdn = row[2]
+	if row[0] != password:
+		abort(401)
 
 	token = ''.join("%.2x" % i for i in secrets.token_bytes(32))
 	resp = make_response()
@@ -416,9 +431,6 @@ def auth():
 	cookie = cookies.get(user)
 	if cookie == None:
 		cookie = Cookie()
-		cookie.user = user
-		cookie.vrf = vrf
-		cookie.fqdn = fqdn
 		cookie.tokens = []
 		cookies[user] = cookie
 	else:

@@ -241,34 +241,6 @@ init_spi(kernel_vpp_ipsec_t *this)
 	return ok ? 0 : -EINVAL;
 }
 
-/*static void
-sw_interface_details(void *user, struct naas_api_sw_interface *interface)
-{
-	uint32_t *sw_if_index;
-
-	sw_if_index = user;
-	*sw_if_index = interface->sw_if_index;
-}
-
-static uint32_t
-get_sw_if_index(const char *if_name)
-{
-	int sw_if_index;
-
-	sw_if_index = ~0;
-	naas_api_sw_interface_dump(sw_interface_details, &sw_if_index, if_name);
-	return sw_if_index;
-}
-
-static uint32_t
-get_ipsec_sw_if_index(uint32_t instance)
-{
-	char if_name[64];
-
-	snprintf(if_name, sizeof(if_name), "ipsec%d", instance);
-	return get_sw_if_index(if_name);
-}*/
-
 static uint32_t
 get_other_id(ike_sa_t *ike_sa, child_sa_t *child_sa)
 {
@@ -319,27 +291,11 @@ create_ipsec_interface(kernel_vpp_ipsec_t *this, uint32_t unique_id)
 
 	naas_api_ipsec_itf_create(unique_id, &sw_if_index);
 	naas_api_sw_interface_set_unnumbered(1, this->loop_sw_if_index,	sw_if_index);
+	naas_api_sw_interface_set_flags(sw_if_index, IF_STATUS_API_FLAG_ADMIN_UP);
 	return sw_if_index;
 }
 
-/*
-static uint32_t
-get_or_create_ipsec_interface(kernel_vpp_ipsec_t *this, ike_sa_t *ike_sa, child_sa_t *child_sa)
-{
-	uint32_t sw_if_index, unique_id;
-
-	unique_id = ike_sa->get_unique_id(ike_sa);
-	sw_if_index = get_ipsec_sw_if_index(unique_id);
-	if (sw_if_index == ~0) {
-		sw_if_index = create_ipsec_interface(this, ike_sa, child_sa);
-	}
-
-	return sw_if_index;
-}
-*/
-
-METHOD (kernel_ipsec_t, ipsec_get_features, kernel_feature_t,
-		kernel_vpp_ipsec_t *this)
+METHOD (kernel_ipsec_t, ipsec_get_features, kernel_feature_t, kernel_vpp_ipsec_t *this)
 {
 	return KERNEL_ESP_V3_TFC;
 }
@@ -667,6 +623,7 @@ METHOD(kernel_ipsec_t, add_sa, status_t, kernel_vpp_ipsec_t *this,
 	memcpy (is_ipv6 ? mp.entry.tunnel_dst.un.ip6 : mp.entry.tunnel_dst.un.ip4,
 			dst.ptr, dst.len);
 
+	this->mutex->lock(this->mutex);
 	err = NAAS_API_INVOKE(mp, rmp);
 	if (rmp) {
 		stat_index = ntohl(rmp->stat_index);
@@ -674,14 +631,13 @@ METHOD(kernel_ipsec_t, add_sa, status_t, kernel_vpp_ipsec_t *this,
 	naas_api_msg_free(rmp);
 	if (err.num && err.type == NAAS_ERR_ERRNO) {
 		DBG1(DBG_KNL, "vac adding SA with SPI %.8x failed", htonl(id->spi));
-		return FAILED;
+		goto err;
 	}
 	if (err.num && err.type == NAAS_ERR_VNET) {
 		DBG1(DBG_KNL, "add SA failed rv:%d", err.num);
-		return FAILED;
+		goto err;
 	}
 
-	this->mutex->lock(this->mutex);
 	key.src = id->src;
 	key.dst = id->dst;
 	key.spi = id->spi;
@@ -699,6 +655,10 @@ METHOD(kernel_ipsec_t, add_sa, status_t, kernel_vpp_ipsec_t *this,
 	this->mutex->unlock(this->mutex);
 
 	return SUCCESS;
+
+err:
+	this->mutex->unlock(this->mutex);
+	return FAILED;
 }
 
 METHOD(kernel_ipsec_t, query_sa, status_t, kernel_vpp_ipsec_t *this,
@@ -897,8 +857,8 @@ METHOD (kernel_ipsec_t, flush_sas, status_t, kernel_vpp_ipsec_t *this)
 	}
 	rv = SUCCESS;
 error:
-	enumerator->destroy (enumerator);
-	this->mutex->unlock (this->mutex);
+	enumerator->destroy(enumerator);
+	this->mutex->unlock(this->mutex);
 	return rv;
 }
 
@@ -998,7 +958,7 @@ update_routes(struct kernel_vpp_ipsec *ipsec, int is_add, uint32_t sw_if_index,
 	e = remote_ts->create_enumerator(remote_ts);
 	while (e->enumerate(e, &ts)) {
 		get_ts_net(ts, &prefix, &prefixlen);
-		naas_api_ip_route_add_del(is_add, prefix, prefixlen, sw_if_index);
+		naas_api_ip_route_add_del(is_add, vrf, prefix, prefixlen, sw_if_index);
 		nats_publish(ipsec, is_add, vrf, unique_id, prefix, prefixlen);
 	}
 	e->destroy(e);
@@ -1176,11 +1136,13 @@ METHOD(listener_t, child_updown, bool,
 
 	MYDBG("child_%s %.8x_i %.8x_o", up ? "up" : "down", ntohl(i_spi), ntohl(o_spi));
 
+	this->ipsec->mutex->lock(this->ipsec->mutex);
 	if (up) {
 		kernel_vpp_child_up(this, ike_sa, child_sa);
 	} else {
 		kernel_vpp_child_down(this, ike_sa, child_sa);
 	}
+	this->ipsec->mutex->unlock(this->ipsec->mutex);
 
 	return TRUE;
 }
@@ -1198,7 +1160,9 @@ METHOD(listener_t, child_rekey, bool,
 	MYDBG("child_rekey %.8x_i %.8x_o => %.8x_i %.8x_o",
 			ntohl(old_i_spi), ntohl(old_o_spi), ntohl(new_i_spi), ntohl(new_o_spi));
 
+	this->ipsec->mutex->lock(this->ipsec->mutex);
 	kernel_vpp_child_up(this, ike_sa, new);
+	this->ipsec->mutex->unlock(this->ipsec->mutex);
 
 	return TRUE;
 }

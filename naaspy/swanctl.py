@@ -166,11 +166,11 @@ class MySql:
 
 
 	def add_shared_secret(self, secret):
-		c = self.execute("select id from shared_secrets where type = 1 and data = '%s'"
+		c = self.execute("select id from shared_secrets where type = 1 and data = 0x%s"
 				% secret)
 		row = c.fetchone()
 		if row == None:
-			c = self.execute("insert into shared_secrets (type, data) values (1, '%s')"
+			c = self.execute("insert into shared_secrets (type, data) values (1, 0x%s)"
 					% secret)
 			self.commit()
 			rowid = c.lastrowid

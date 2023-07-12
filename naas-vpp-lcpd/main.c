@@ -36,6 +36,8 @@ struct lcp_itf_pair {
 int g_vrf_support = 1;
 struct naas_dlist g_lcp_itf_pair_head;
 int g_tunsrc_set = 1;
+uint64_t g_milliseconds;
+uint64_t g_api_ltime;
 
 static int
 sr_action_2_behavior(int action)
@@ -100,6 +102,15 @@ lcp_route_logf(int level, int errnum, struct rtnl_route *route, const char *form
 	va_start(ap, format);
 	lcp_route_vlogf(level, errnum, route, format, ap);
 	va_end(ap);
+}
+
+static uint64_t
+lcp_get_milliseconds()
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return ts.tv_sec * 1000llu + ts.tv_nsec / 1000000llu;
 }
 
 static char *
@@ -224,6 +235,7 @@ lcp_nl_handle_seg6_local(int is_add, struct rtnl_route *route, struct rtnl_nexth
 		behavior = sr_action_2_behavior(action);
 		assert(behavior >= 0);
 		naas_api_sr_localsid_add_del(is_add, behavior, nl_addr_get_binary_addr(dst), table_id);
+		g_api_ltime = g_milliseconds;
 		break;
 
 	default:
@@ -309,6 +321,8 @@ lcp_nl_handle_seg6(int is_add, struct rtnl_route *route, struct rtnl_nexthop *nh
 	if (!is_add) {
 		naas_api_sr_policy_del(bsid);
 	}
+
+	g_api_ltime = g_milliseconds;
 }
 
 static void
@@ -373,6 +387,7 @@ obj_input(struct nl_object *obj, void *arg)
 			if (!rtnl_link_vrf_get_tableid(link, &tableid)) {
 				naas_api_ip_table_add_del(is_add, 0, tableid);
 				naas_api_ip_table_add_del(is_add, 1, tableid);
+				g_api_ltime = g_milliseconds;
 			} else {
 				naas_logf(LOG_DEBUG, 0, "[NETLINK][LINK:%s] VRF without table",
 						link_name);
@@ -442,6 +457,7 @@ main(int argc, char **argv)
 	int fd, opt, dflag, long_option_index, log_options, log_level;
 	const char *long_option_name;
 	fd_set rfds;
+	struct timeval to;
 	static struct option long_options[] = {
 		{"help", no_argument, 0, 'h' },
 		{"daemonize", no_argument, 0, 'd' },
@@ -510,15 +526,25 @@ main(int argc, char **argv)
 		naas_logf(LOG_NOTICE, 0, "[VPP] No lcp interfaces found");
 	}
 
+	g_api_ltime = lcp_get_milliseconds();
+
 	while (1) {
 		fd = nl_socket_get_fd(sock);
 
 		FD_ZERO(&rfds);
 		FD_SET(fd, &rfds);
-		select(fd + 1, &rfds, NULL, NULL, NULL);
+		to.tv_sec = 2;
+		to.tv_usec = 0;
+		select(fd + 1, &rfds, NULL, NULL, &to);
+
+		g_milliseconds = lcp_get_milliseconds();
 
 		if (FD_ISSET(fd, &rfds)) {
 			nl_recvmsgs_default(sock);
+		}
+
+		if (g_milliseconds - g_api_ltime > 2000) {
+			naas_api_show_version();
 		}
 	}
 

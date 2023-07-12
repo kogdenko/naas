@@ -411,7 +411,8 @@ typedef struct naas_api_vl_api_ip_route_add_del {
 } naas_api_vl_api_ip_route_add_del_t;
 
 naas_err_t
-naas_api_ip_route_add_del(int is_add, struct in_addr prefix, int prefixlen, int sw_if_index)
+naas_api_ip_route_add_del(int is_add, int table_id,
+		struct in_addr prefix, int prefixlen, int sw_if_index)
 {
 	int msg_id;
 	naas_err_t err;
@@ -426,6 +427,8 @@ naas_api_ip_route_add_del(int is_add, struct in_addr prefix, int prefixlen, int 
 	mp.base.route.prefix.len = prefixlen;
 	vl_api_address_create(&mp.base.route.prefix.address, AF_INET, &prefix);
 	mp.base.route.n_paths = 1;
+	mp.base.route.table_id = htonl(table_id);
+	mp.path.table_id = htonl(table_id);
 	mp.path.sw_if_index = htonl(sw_if_index);
 
 	err = NAAS_API_INVOKE(mp, rp);

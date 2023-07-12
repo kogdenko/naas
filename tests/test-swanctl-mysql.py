@@ -21,7 +21,7 @@ class Generator(swanctl.MySql):
 
 	def helloworld(self):
 		local_id = self.add_identity(swanctl.ID_FQDN, "magnit.ru")
-		remote_id = self.add_identity(swanctl.ID_KEY_ID, 12)
+		remote_id = self.add_identity(swanctl.ID_KEY_ID, 0)
 		secret_id = self.add_shared_secret(self.secret)
 
 		self.add_shared_secret_identity(secret_id, local_id)

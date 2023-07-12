@@ -79,7 +79,8 @@ naas_err_t naas_api_sw_interface_set_flags(uint32_t sw_if_index, vl_api_if_statu
 naas_err_t naas_api_sw_interface_set_unnumbered(int is_add, uint32_t sw_if_index,
 		uint32_t unnumbered_sw_if_index);
 
-naas_err_t naas_api_ip_route_add_del(int is_add, struct in_addr prefix, int prefixlen, int sw_if_index);
+naas_err_t naas_api_ip_route_add_del(int is_add, int table_id,
+		struct in_addr prefix, int prefixlen, int sw_if_index);
 
 typedef void (*naas_api_lcp_itf_pair_get_f)(void *user, int phy_sw_if_index, int host_if_index);
 naas_err_t naas_api_lcp_itf_pair_get(naas_api_lcp_itf_pair_get_f handler, void *user);

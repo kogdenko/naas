@@ -98,39 +98,32 @@ class Server:
 				database="naas")
 		self.mysql_execute("create table if not exists conns ("
 				"pod INT,"
+				"vrf int,"
 				"reqid INT,"
 				"ts varchar(63),"
-				"vrf int,"
-				"primary key(pod, reqid)"
+				"primary key(pod, vrf, reqid, ts)"
 				")")
 
 
 	# nats --server 192.168.122.1 pub shutdown "1"
-	def process_shutdown(self, pod):
+	def process_pod_shutdown(self, pod):
 		mysql_cursor = self.mysql_execute("select * from conns where pod = %d" % pod)
 		while True:
-			row = mysql_cursor.fetchone()
-			if row == None:
+			rows = mysql_cursor.fetchone()
+			if rows == None:
 				break
-			assert(len(row) == 4)
-			pod = int(row[0])
-			reqid = int(row[1])
-			ts = str(row[2])
-			vrf = int(row[3])
-			self.process_updown(True, "del", reqid, ts, vrf, pod)
+			assert(len(rows) == 4)
+			pod = int(rows[0])
+			vrf = int(rows[1])
+			reqid = int(rows[2])
+			ts = str(rows[3])
+			self.process_tunnel_updown(False, True, pod, vrf, reqid, ts)
 
 		self.mysql_execute("delete from conns where pod = %d" % (pod))
 		self.mysql_conn.commit()
 
 
-	def add_policy(self, bsid, prefix, vrf, pod):
-		segs = [None] * 16
-		segs[0] = "2aaa:%d:%d:1::" % (pod, vrf)
-		self.vpp.api.sr_policy_add(bsid_addr = bsid,
-				weight = 1,
-				is_encap = 1,
-				sids = { "num_sids": 1, "sids": segs })
-
+	def add_policy(self, bsid, vrf, prefix):
 		self.vpp.api.sr_steering_add_del(is_del = 0,
 			bsid_addr = bsid,
 			table_id = vrf,
@@ -138,68 +131,79 @@ class Server:
 			traffic_type = SR_STEER_IPV4)
 
 
-	def del_policy(self, bsid, prefix, vrf):
+	def del_policy(self, bsid, vrf, prefix):
 		self.vpp.api.sr_steering_add_del(is_del = 1,
 				bsid_addr = bsid,
 				table_id = vrf,
 				prefix = { "address": prefix.network_address, "len": prefix.prefixlen },
 				traffic_type = SR_STEER_IPV4)
 
-		self.vpp.api.sr_policy_del(bsid_addr = bsid)
 
-
-	def insert_into_conns(self, pod, reqid, ts, vrf):
-		mysql_cmd = ("insert into conns (pod, reqid, ts, vrf) values (%d, %d, \"%s\", %d)" %
-				(pod, reqid, ts, vrf))
+	def insert_into_db(self, pod, vrf, reqid, ts):
+		mysql_cmd = ("insert into conns (pod, vrf, reqid, ts) values (%d, %d, %d, \"%s\")"
+				% (pod, vrf, reqid, ts))
 		self.mysql_execute(mysql_cmd)
 		self.mysql_conn.commit()
 
 
-	def delete_from_conns(self, pod, reqid):	
-		mysql_cmd = "delete from conns where pod = %d and reqid = %d" % (pod, reqid)
+	def delete_from_db(self, pod, vrf, reqid, ts):
+		mysql_cmd = ("delete from conns where pod = %d and vrf = %d and reqid = %d and ts = \"%s\""
+				% (pod, vrf, reqid, ts))
 		self.mysql_execute(mysql_cmd)
 		self.mysql_conn.commit()
 
 
-	# nats --server 192.168.122.1 pub updown "add 1 48.0.0.0/24 12 1"
-	def process_updown(self, to_mysql, action, reqid, ts, vrf, pod):
+	def create_bsid(self, pod, vrf):
+		return "2999:%d:%d:1::" % (pod, vrf)
+
+
+	# nats --server 192.168.122.1 pub tunnel-up "1 12 1 48.0.0.0/24"
+	def process_tunnel_updown(self, is_up, commit, pod, vrf, reqid, ts):
 		prefix = ipaddress.ip_network(ts)
 		prefix.network_address += 1
-		intf = "ipsec" + str(pod) + "_" + str(reqid)
 
-		bsid = "2999:%d:%d:1::" % (pod, vrf)
+		bsid = self.create_bsid(pod, vrf)
 
-		policy_key = str(vrf) + "_" + ts
-		policy_ref_count = self.policies.get(policy_key)
+		conn = str(pod) + "_" + str(vrf) + "_" + str(reqid) + "_" + str(ts)
+		conn_ref_count = self.conns.get(conn)
 
-		if action == 'add':
-			if to_mysql:
-				self.insert_into_conns(pod, reqid, ts, vrf)
+		intf = "p" + str(pod) + "-ipsec" + str(reqid) + "-" + str(vrf)
+		intf_ref_count = self.intfs.get(intf)
 
-			system("ip link add %s type dummy" % intf)
-			system("ip link set dev %s master VRF%d" % (intf, vrf))
-			system("ip add add %s dev %s" % (prefix, intf));
-			system("ip link set dev %s up" % intf);
-
-			if policy_ref_count == None:
-				self.add_policy(bsid, prefix, vrf, pod)
-				self.policies[policy_key] = 0
-			self.policies[policy_key] += 1
-
-		else:
-			if policy_ref_count == None:
+		if is_up:
+			if conn_ref_count != None:
 				return
-			assert(policy_ref_count > 0)
+			self.conns[conn] = 1
 
-			if to_mysql:
-				self.delete_from_conns(pod, reqid)
+			if commit:
+				self.insert_into_db(pod, vrf, reqid, ts)
 
-			system("ip link del %s" % intf);
+			if intf_ref_count == None:
+				system("ip link add %s type dummy" % intf)
+				system("ip link set dev %s master VRF%d" % (intf, vrf))
+				system("ip link set dev %s up" % intf);
+				self.intfs[intf] = 0
+			self.intfs[intf] += 1
 
-			self.policies[policy_key] -= 1
-			if self.policies[policy_key] == 0:
-				self.policies.pop(policy_key)
-				self.del_policy(bsid, prefix, vrf)
+			system("ip addr add %s dev %s" % (prefix, intf));
+			self.add_policy(bsid, vrf, prefix)
+				
+		else:
+			if conn_ref_count == None:
+				return
+			del self.conns[conn]
+
+			if commit:
+				self.delete_from_db(pod, vrf, reqid, ts)
+
+			self.del_policy(bsid, vrf, prefix)
+			system("ip addr del %s dev %s" % (prefix, intf))
+
+			assert(intf_ref_count != None)
+			self.intfs[intf] -= 1
+			if self.intfs[intf] == 0:
+				del self.intfs[intf]
+				system("ip link del %s" % intf);
 
 
 	def __init__(self, args):
@@ -207,77 +211,68 @@ class Server:
 		self.connect_mysql(args.mysql_server, args.mysql_user, args.mysql_password)
 
 		self.nats_server = args.nats_server
+		self.conns = {}
+		self.intfs = {}
 
-		self.policies = {}
 
+	def restore(self):
 		mysql_cursor = self.mysql_execute("select * from conns")
 		while True:
-			row = mysql_cursor.fetchone()
-			if row == None:
+			rows = mysql_cursor.fetchone()
+			if rows == None:
 				break
-			assert(len(row) == 4)
-			pod = int(row[0])
-			reqid = int(row[1])
-			ts = str(row[2])
-			vrf = int(row[3])
-			self.process_updown(False, "add", reqid, ts, vrf, pod)
+			assert(len(rows) == 4)
+			pod = int(rows[0])
+			vrf = int(rows[1])
+			reqid = int(rows[2])
+			ts = str(rows[3])
+			self.process_tunnel_updown(True, False, pod, vrf, reqid, ts)
 
 
-	def vpp_test(self, msg):
-		bsid = "2999:%d:%d:1::" % (1, 12)
+	def configure(self, pod, vrf):
+		bsid = self.create_bsid(pod, vrf)
 		segs = [None] * 16
-		segs[0] = "2aaa:%d:%d:1::" % (1, 12)
-		prefix = ipaddress.ip_network("48.0.0.0/8")
+		segs[0] = "2aaa:%d:%d:1::" % (pod, vrf)
 
-		system("ip link del VRF%d" % 1)
-		system("ip link add dev VRF%d type vrf table %d" % (1, 1))
+		system("ip link del VRF%d" % vrf)
+		system("ip link add dev VRF%d type vrf table %d" % (vrf, vrf))
 
 		self.vpp.api.sr_policy_add(bsid_addr = bsid,
 				weight = 1,
 				is_encap = 1,
 				sids = { "num_sids": 1, "sids": segs })
 
-		self.vpp.api.sr_steering_add_del(is_del = 0,
-			bsid_addr = bsid,
-			table_id = 1,
-			prefix = { "address": prefix.network_address, "len": prefix.prefixlen },
-			traffic_type = SR_STEER_IPV4)
-
 
 	async def process_message(self, msg):
 		data = msg.data.decode("utf-8")
-		print("process: %s: %s" % (msg.subject, data))
+		print_log(LOG_INFO, "process: %s: %s" % (msg.subject, data))
 		args = data.split(' ')
-		if msg.subject == "shutdown":
+		if msg.subject == "pod-shutdown":
 			pod = int(args[0])
-			self.process_shutdown(pod)
-		elif msg.subject == "updown":
-			action = args[0]
-			reqid = int(args[1])
-			ts = args[2]
-			vrf = int(args[3])
-			pod = int(args[4])
-			self.process_updown(True, action, reqid, ts, vrf, pod)
+			self.process_pod_shutdown(pod)
+		elif msg.subject == "tunnel-up":
+			pod = int(args[0])
+			vrf = int(args[1])
+			reqid = int(args[2])
+			ts = args[3]
+			self.process_tunnel_updown(True, True, pod, vrf, reqid, ts)
+		elif msg.subject == "tunnel-down":
+			pod = int(args[0])
+			vrf = int(args[1])
+			reqid = int(args[2])
+			ts = args[3]
+			self.process_tunnel_updown(False, True, pod, vrf, reqid, ts)
 
 
-	async def start(self):
+	async def run(self):
 		nc = await nats.connect(self.nats_server)
 
-		await nc.subscribe("updown", "workers", self.process_message)
-		await nc.subscribe("shutdown", "", self.process_message)
-
-		while True:
-			try:
-				await nc.flush(1)
-			except nats.errors.TimeoutError:
-				pass
-			except Exception:
-				print_err()
-
-		await nc.close()
+		await nc.subscribe("tunnel-up", "workers", self.process_message)
+		await nc.subscribe("tunnel-down", "workers", self.process_message)
+		await nc.subscribe("pod-shutdown", "", self.process_message)
 
 
-if __name__ == '__main__':
+def main():
 	ap = argparse.ArgumentParser()
 	ap.add_argument("--nats-server", metavar="host", type=str, default="localhost",
 			help="Specify nats server host")
@@ -294,12 +289,28 @@ if __name__ == '__main__':
 	ap.add_argument("--vpp-api-socket", metavar="path", type=str, default="/run/vpp/api.sock",
 			help="Specify VPP api socket")
 
+	ap.add_argument("--configure", action='store_true', help="Configure ip tables/policies")
+
 	args = ap.parse_args()
 
 	server = Server(args)
 
+	# Debug only
+	if args.configure:
+		server.configure(10, 12)
+		return
+
+	server.restore()
 	print_log(LOG_INFO, "Listening incoming messages...")
+
+	loop = asyncio.new_event_loop()
+	asyncio.set_event_loop(loop)
+	loop.run_until_complete(server.run())
 	try:
-		asyncio.run(server.start())
-	except Exception as err:
-		print_err(err)
+		loop.run_forever()
+	finally:
+		loop.close()
+
+
+if __name__ == '__main__':
+	main()
